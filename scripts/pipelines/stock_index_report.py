@@ -14,7 +14,7 @@ import os
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Alignment
-from stock_cap import get_all_index_caps
+from scripts.pipelines.stock_cap_report import get_all_index_caps
 import time
 
 from src.asset_mgnt_report.metrics.annualization import annualized_return_from_prices

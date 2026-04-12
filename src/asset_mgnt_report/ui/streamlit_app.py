@@ -25,12 +25,12 @@ with st.sidebar:
         default=["cpi", "gdp", "interest_rate", "carry_trade", "stock_index", "currency", "precious_metals", "bonds", "crypto"],
     )
 
-def _run_script(script_name: str) -> tuple[int, str]:
+def _run_script(module_name: str) -> tuple[int, str]:
     env = dict(**subprocess.os.environ)
     env["AMR_DEBUG"] = "true" if debug else "false"
     env["AMR_USE_PROXY"] = "true" if use_proxy else "false"
     process = subprocess.run(
-        [sys.executable, script_name],
+        [sys.executable, "-m", module_name],
         cwd=str(config.project_root),
         capture_output=True,
         text=True,
@@ -44,32 +44,32 @@ if col1.button("运行主报表", use_container_width=True):
     logs: list[str] = []
     for module_name in selected:
         script_map = {
-            "cpi": "cpi.py",
-            "gdp": "GDP_new.py",
-            "interest_rate": "interest_rate.py",
-            "carry_trade": "carry_trade.py",
-            "stock_index": "asset_stock_index.py",
-            "currency": "currency.py",
-            "precious_metals": "precious_metals.py",
-            "bonds": "bonds.py",
-            "crypto": "crypto_market_report.py",
+            "cpi": "scripts.pipelines.cpi_report",
+            "gdp": "scripts.pipelines.gdp_report",
+            "interest_rate": "scripts.pipelines.interest_rate_report",
+            "carry_trade": "scripts.pipelines.carry_trade_report",
+            "stock_index": "scripts.pipelines.stock_index_report",
+            "currency": "scripts.pipelines.fx_report",
+            "precious_metals": "scripts.pipelines.precious_metals_report",
+            "bonds": "scripts.pipelines.bond_report",
+            "crypto": "scripts.pipelines.crypto_report",
         }
         code, output = _run_script(script_map[module_name])
         logs.append(f"## {module_name} ({code})\n\n```text\n{output}\n```")
     st.markdown("\n\n".join(logs))
 
 if col2.button("运行 Gainer", use_container_width=True):
-    code, output = _run_script("Gainer.py")
+    code, output = _run_script("scripts.entrypoints.run_gainer")
     st.code(output, language="text")
     st.write(f"exit code: {code}")
 
 if col3.button("运行整体表", use_container_width=True):
-    code, output = _run_script("整体.py")
+    code, output = _run_script("scripts.entrypoints.run_overall")
     st.code(output, language="text")
     st.write(f"exit code: {code}")
 
 if col4.button("运行全量校验", use_container_width=True):
-    code, output = _run_script("tools_validate.py")
+    code, output = _run_script("scripts.validation.validate_outputs")
     st.code(output, language="text")
     st.write(f"exit code: {code}")
 

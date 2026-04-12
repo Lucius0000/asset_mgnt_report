@@ -66,33 +66,37 @@ def format_usd(x):
 def format_billion(x):
     return f"{x/1e9:,.2f} B"
 
-# ---- 优先读取配置/环境变量，其次回退到交互 ----
-old_date_str = resolve_config_value(explicit=CONFIG["old_date"], env_key="AMR_BTC_OLD_DATE") or input("请输入【旧日期】(YYYY-MM-DD): ").strip()
-new_date_str = resolve_config_value(explicit=CONFIG["new_date"], env_key="AMR_BTC_NEW_DATE") or input("请输入【新日期】(YYYY-MM-DD): ").strip()
+mcap_old = None
+mcap_new = None
+Gainer = None
 
-# 解析与校验
-try:
-    old_date = datetime.strptime(old_date_str, "%Y-%m-%d").date()
-    new_date = datetime.strptime(new_date_str, "%Y-%m-%d").date()
-except ValueError:
-    raise SystemExit("日期格式错误，请使用 YYYY-MM-DD，例如 2017-12-17")
 
-if new_date < old_date:
-    raise SystemExit("新日期必须不早于旧日期。")
+def main():
+    global mcap_old, mcap_new, Gainer
 
-# 拉取区间数据并取两日市值
-caps = _fetch_btc_market_caps_utc(old_date, new_date)
-mcap_old = _pick_cap_for_date(caps, old_date)
-mcap_new = _pick_cap_for_date(caps, new_date)
+    old_date_str = resolve_config_value(explicit=CONFIG["old_date"], env_key="AMR_BTC_OLD_DATE") or input("请输入【旧日期】(YYYY-MM-DD): ").strip()
+    new_date_str = resolve_config_value(explicit=CONFIG["new_date"], env_key="AMR_BTC_NEW_DATE") or input("请输入【新日期】(YYYY-MM-DD): ").strip()
 
-# 计算 Gainer
-Gainer = mcap_new - mcap_old
+    try:
+        old_date = datetime.strptime(old_date_str, "%Y-%m-%d").date()
+        new_date = datetime.strptime(new_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        raise SystemExit("日期格式错误，请使用 YYYY-MM-DD，例如 2017-12-17")
 
-# 输出
-print("\n=== 比特币总市值（USD） ===")
-print(f"{old_date}  市值: {format_usd(mcap_old)}  ({format_billion(mcap_old)} USD)")
-print(f"{new_date}  市值: {format_usd(mcap_new)}  ({format_billion(mcap_new)} USD)")
-print(f"\nGainer = 新日期 - 旧日期 = {format_usd(Gainer)}  ({format_billion(Gainer)} USD)")
+    if new_date < old_date:
+        raise SystemExit("新日期必须不早于旧日期。")
 
-# 为了在 Spyder 变量窗中可直接查看差值，保留变量名 Gainer
-Gainer
+    caps = _fetch_btc_market_caps_utc(old_date, new_date)
+    mcap_old = _pick_cap_for_date(caps, old_date)
+    mcap_new = _pick_cap_for_date(caps, new_date)
+    Gainer = mcap_new - mcap_old
+
+    print("\n=== 比特币总市值（USD） ===")
+    print(f"{old_date}  市值: {format_usd(mcap_old)}  ({format_billion(mcap_old)} USD)")
+    print(f"{new_date}  市值: {format_usd(mcap_new)}  ({format_billion(mcap_new)} USD)")
+    print(f"\nGainer = 新日期 - 旧日期 = {format_usd(Gainer)}  ({format_billion(Gainer)} USD)")
+    return Gainer
+
+
+if __name__ == "__main__":
+    main()

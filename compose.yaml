@@ -1,0 +1,27 @@
+services:
+  amr-ui:
+    build: .
+    image: asset-mgnt-report
+    command: streamlit run scripts/entrypoints/run_streamlit.py --server.address=0.0.0.0 --server.port=8501
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data/local:/app/data/local
+      - ./output:/app/output
+    environment:
+      - FRED_API_KEY=${FRED_API_KEY:-}
+      - AMR_DEBUG=${AMR_DEBUG:-false}
+      - AMR_USE_PROXY=${AMR_USE_PROXY:-false}
+
+  amr-cli:
+    build: .
+    image: asset-mgnt-report
+    command: python -m scripts.entrypoints.run_main
+    volumes:
+      - ../main:/baseline_main:ro
+      - ./data/local:/app/data/local
+      - ./output:/app/output
+    environment:
+      - FRED_API_KEY=${FRED_API_KEY:-}
+      - AMR_DEBUG=${AMR_DEBUG:-false}
+      - AMR_USE_PROXY=${AMR_USE_PROXY:-false}

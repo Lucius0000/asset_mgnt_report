@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.asset_mgnt_report.services.validation import build_markdown_report, compare_excel_files
 
@@ -21,13 +26,19 @@ OUTPUT_FILES = [
 
 
 def main() -> None:
-    root = Path(__file__).resolve().parent
-    main_output = root.parent / "main" / "output"
-    codex_output = root / "output"
+    project_root = PROJECT_ROOT
+    sibling_main_output = project_root.parent / "main" / "output"
+    container_main_output = Path("/baseline_main/output")
+    main_output = sibling_main_output if sibling_main_output.exists() else container_main_output
+    codex_output = project_root / "output"
+    if not main_output.exists():
+        raise FileNotFoundError(
+            "未找到 main 基线输出目录。请在宿主机保留 ../main worktree，或在 Docker 中挂载 /baseline_main。"
+        )
     results = [
         compare_excel_files(main_output / name, codex_output / name, tolerance=1e-4) for name in OUTPUT_FILES
     ]
-    report_path = root / "docs" / "重构前后对比报告.md"
+    report_path = project_root / "docs" / "重构前后对比报告.md"
     build_markdown_report(
         results,
         report_path,

@@ -1,259 +1,305 @@
-### 一、`asset_mgnt_report`项目概述
-- 执行`main.py`即可调用各个子脚本，获取CPI、GDP、货币利率、货币利差、股票权益、债券、商品与贵金属、货币汇率等数据，并输出在`output`子文件夹。
-- 执行`Gainer.py`，调用四个资产大类的Gainer计算脚本，并输出总结表格在`output`子文件夹。
-- 需要单独执行`整体.py`，计算Sharpe Ratio，输出`周报-资产大类表现-整体`表格在`output`子文件夹。
-- 执行 `stock_us_cn_hk/market_report_china_hk_2weeks.py`，计算二级市场的股票数据，输出在该子文件夹下。
+### 一、项目概述
+
+- `asset_mgnt_report` 用于生成资产管理周报相关数据，覆盖 CPI、GDP、利率、利差、汇率、股票权益、债券、商品与贵金属、数字货币，以及二级市场补充报表。
+- 项目已经工程化为三层：
+  - 根目录兼容入口：保留 `main.py`、`Gainer.py`、`整体.py`
+  - `scripts/`：正式脚本入口、资产管线脚本、校验脚本
+  - `src/asset_mgnt_report/`：统一配置、共享算法、运行调度、Web UI
+- 运行输出默认写入 `output/`，便于复核、对比和二次加工。
 
 ### 二、前置准备
 
-####  1. 主要通过AKShare、yfinance和FRED等金融数据库自动化获取数据，但是有少量数据需要提前下载至`data`子文件夹：
+#### 1. Python 依赖
 
-> 已经设置了文件名正则匹配，更新文件后不需要修改代码
+- 安装依赖：
 
-- 香港CPI [政府統計處 : 表510-60001：消費物價指數（2019年10月至2020年9月 = 100）](https://www.censtatd.gov.hk/tc/web_table.html?full_series=1&id=510-60001#)
-- - 需要选择“完整数列”，下载长周期的完整数据；同时删去按年计算的CPI，仅保留按月计算的CPI结果
+```powershell
+pip install -r requirements.txt
+```
+
+#### 2. FRED_API_KEY
+
+- 部分脚本需要从 FRED 获取数据，请先配置环境变量 `FRED_API_KEY`
+- 申请地址： [FRED_API_KEYS](https://fredaccount.stlouisfed.org/apikeys)
+
+PowerShell 临时设置示例：
+
+```powershell
+$env:FRED_API_KEY="your_fred_api_key"
+```
+
+#### 3. 手动准备的数据文件
+
+主要通过 AKShare、yfinance 和 FRED 自动获取数据，但仍有少量数据需要提前下载并放入 `data/seeds/`。
+
+> 已设置文件名正则匹配，更新文件后通常不需要改代码
+
+- 香港 CPI：[政府統計處 : 表510-60001：消費物價指數](https://www.censtatd.gov.hk/tc/web_table.html?full_series=1&id=510-60001#)
+  - 需要选择“完整数列”，下载长周期完整数据
+  - 删去按年计算的 CPI，仅保留按月结果
 ![CPI_HK 获取图](assets/CPI_HK.png)
 
-- 恒生指数成分股 [指數及成份股 - 指數成份股 - 恆生指數](http://www.aastocks.com/tc/stocks/market/index/hk-index-con.aspx?index=HSI)
+- 恒生指数成分股：[指數及成份股 - 指數成份股 - 恆生指數](http://www.aastocks.com/tc/stocks/market/index/hk-index-con.aspx?index=HSI)
 ![HSI_CAP 获取图](assets/HSI_CAP.png)
 
-- 美国财政部公布的流通国债总票面价值 [U.S. Treasury Monthly Statement of the Public Debt (MSPD)](https://fiscaldata.treasury.gov/datasets/monthly-statement-public-debt/summary-of-treasury-securities-outstanding) ![MSPD获取图](assets/MSPD.png)
+- 美国财政部流通国债总票面价值：[U.S. Treasury Monthly Statement of the Public Debt (MSPD)](https://fiscaldata.treasury.gov/datasets/monthly-statement-public-debt/summary-of-treasury-securities-outstanding)
+![MSPD获取图](assets/MSPD.png)
 
-- 沪深300成分股名录 [沪深300指数 (000300)](https://www.csindex.com.cn/uploads/file/autofile/cons#/indices/family/detail?indexCode=000300) ![HS300_list获取图](assets/HS300_list.png)
+- 沪深300成分股名录：[沪深300指数 (000300)](https://www.csindex.com.cn/uploads/file/autofile/cons#/indices/family/detail?indexCode=000300)
+![HS300_list获取图](assets/HS300_list.png)
 
-#### 2. “整体”表格
+#### 4. “整体”表格准备
 
-- 2.1 需要提前把各个资产大类的`月收益率年化 (%)``年收益率 (%)``月波动率年化（%）``总市值 ($)`按照`周报-资产大类表现-整体`的形式整理成`*.xlsx`表格，放在`data`子文件夹。
+- 需要先把各资产大类的 `月收益率年化 (%)`、`年收益率 (%)`、`月波动率年化（%）`、`总市值 ($)` 按 `整体.xlsx` 模板整理到 `data/seeds/整体.xlsx`
+- 还需要把 `output/fx_metrics.xlsx` 中的汇率表复制到 `整体.xlsx` 的 `Sheet2`
+- 然后再执行 `整体.py`
 
-整体表格整理示例 ![整体表格整理示例](assets/整体_处理前.png)
+整体表格整理示例：
+![整体表格整理示例](assets/整体_处理前.png)
 
-- 2.2 还需要把`output`文件夹下的汇率表`fx_metrics.xlsx`复制到`整体.xlsx`的sheet2
-- 2.3 然后单独执行`整体.py`，计算Sharpe Ratio、 Top Gainer，输出`周报-资产大类表现-整体`表格在`output`子文件夹。
+### 三、使用方法
 
-#### 3.FRED_API_KEY
-- 有些脚本要从 FRED 获取数据，就要先获取 FRED 的 API Key 并写入环境变量，应当设置的环境变量名称为 `FRED_API_KEY`
-- FRED_API 申请网址： [FRED_API_KEYS](https://fredaccount.stlouisfed.org/apikeys)
+#### 1. 本地 Python 运行
 
-### 三、文件结构：
-- asset_mgnt_report
-- - main.py
-- - 整体.py
-- - Gainer.py
-- - requirements.txt ，需要提前安装的 Python 第三方库
-- - stock_us_cn_hk文件夹，执行其中脚本，输出结果为周报的 “二级市场”
-- - output文件夹，存放输出结果
-- - - raw_data文件夹，存放原始数据，便于debug、cross validation
-- - data文件夹，存放脚本无法获取、需要手动下载的数据
-- - old code文件夹
+- 一键运行主报表：
 
-#### 输出文件说明：
-| 指标模块     | 来源脚本                                 | 输出文件名                                                   |
-| ------------ | ---------------------------------------- | ------------------------------------------------------------ |
-| CPI          | `cpi.py`                                 | `cpi_metrics.xlsx`<br>`cpi_trends.png`                       |
-| GDP          | `GDP_new.py`                             | `gdp_metrics.xlsx`                                           |
-| 利率         | `interest_rate.py`                       | `interest_rate_metrics.xlsx`<br>`interest_rate_trend_2y.png` |
-| 利差         | `carry_trade.py`                         | `currency_spreads.png`                                       |
-| 汇率         | `currency.py`                            | `fx_metrics.xlsx`                                            |
-| 股票权益     | `asset_stock_index.py`<br>`stock_cap.py` | `stock_weekly_report.xlsx`                                   |
-| 债券         | `bonds.py`                               | `bond.xlsx`                                                  |
-| 商品与贵金属 | `precious_metals.py`                     | `commodity_indicators_summary.xlsx`                          |
-| 整体         | `整体.py`                                | `整体.xlsx`                                                  |
+```powershell
+python main.py
+```
 
+- 运行 Gainer 汇总：
 
-### 四、数据获取及计算方法
-#### 1. CPI
-| 地区 | 数据类型              | 数据源说明                                                  |
-| -- | ----------------- | ------------------------------------------------------ |
-| 美国 | 月度 CPI（MoM）       | `akshare.macro_usa_cpi_monthly()`                      |
-|    | 年度 CPI（YoY）       | `akshare.macro_usa_cpi_yoy()`                          |
-|    | 年度 PCE （YOY)  | `akshare.macro_usa_core_pce_price()`                   |
-| | 月度 CPI（MoM） | 近两个月的 YoY 差值近似计算 |
-| 中国 | 月度 CPI（MoM）       | `akshare.macro_china_cpi_monthly()`                    |
-|    | 年度 CPI（YoY）       | `akshare.macro_china_cpi_yearly()`                     |
-| 香港 | 年度&月度 CPI（YoY & MoM） | 本地 Excel 文件：`data/Table 510-60001_sc.xlsx`（经香港政府统计处下载） |
+```powershell
+python Gainer.py
+```
 
+- 运行整体表：
+
+```powershell
+python 整体.py
+```
+
+- 运行二级市场补充报表：
+
+```powershell
+python -m scripts.pipelines.secondary_market_report
+```
+
+#### 2. Web UI 运行
+
+- 启动方式：
+
+```powershell
+streamlit run scripts/entrypoints/run_streamlit.py
+```
+
+- 默认访问地址：
+  - `http://localhost:8501`
+
+- Web UI 可用于：
+  - 选择主报表模块
+  - 启用或关闭 debug / proxy
+  - 运行主报表、Gainer、整体表
+  - 触发 main / codex 输出校验
+
+#### 3. Docker 运行
+
+- 构建镜像：
+
+```powershell
+docker build -t asset-mgnt-report .
+```
+
+- 启动 Web UI：
+
+```powershell
+docker compose up amr-ui
+```
+
+- 在容器中运行主报表：
+
+```powershell
+docker compose run --rm amr-cli python -m scripts.entrypoints.run_main
+```
+
+- 在容器中运行校验：
+
+```powershell
+docker compose run --rm amr-cli python -m scripts.validation.validate_outputs
+```
+
+更完整的 Docker 说明见：
+- `docs/docker部署与使用指南.md`
+
+#### 4. 输出位置
+
+- 主输出目录：`output/`
+- 原始调试数据：`output/raw_data/`
+- main / codex 对比报告：`docs/重构前后对比报告.md`
+
+### 四、项目结构
+
+- `main.py`：主报表兼容入口
+- `Gainer.py`：Gainer 兼容入口
+- `整体.py`：整体表兼容入口
+- `scripts/entrypoints/`：正式入口脚本
+- `scripts/pipelines/`：各资产大类与报表脚本
+- `scripts/validation/`：回归与对比校验脚本
+- `src/asset_mgnt_report/`
+  - `config/`：统一配置与环境变量解析
+  - `metrics/`：统一收益率、年化、波动率、Sharpe 算法
+  - `io/`：路径和输入输出辅助
+  - `services/`：脚本调度、结果校验
+  - `ui/`：Streamlit Web UI
+- `data/seeds/`：纳入版本控制的种子数据
+- `data/local/`：本地临时输入，不纳入版本控制
+- `output/`：运行输出
+- `archive/legacy_code/`：历史脚本归档
+- `docs/`：说明文档与对比报告
+
+### 五、输出文件说明
+
+| 指标模块 | 来源脚本 | 输出文件名 |
+| --- | --- | --- |
+| CPI | `scripts/pipelines/cpi_report.py` | `cpi_metrics.xlsx`、`cpi_trends.png` |
+| GDP | `scripts/pipelines/gdp_report.py` | `gdp_metrics.xlsx` |
+| 利率 | `scripts/pipelines/interest_rate_report.py` | `interest_rate_metrics.xlsx`、`interest_rate_trend_2y.png` |
+| 利差 | `scripts/pipelines/carry_trade_report.py` | `currency_spreads.png` |
+| 汇率 | `scripts/pipelines/fx_report.py` | `fx_metrics.xlsx` |
+| 股票权益 | `scripts/pipelines/stock_index_report.py`、`scripts/pipelines/stock_cap_report.py` | `stock_weekly_report.xlsx` |
+| 债券 | `scripts/pipelines/bond_report.py` | `bonds.xlsx` |
+| 商品与贵金属 | `scripts/pipelines/precious_metals_report.py` | `commodity_indicators_summary.xlsx` |
+| 数字货币 | `scripts/pipelines/crypto_report.py` | `crypto_metrics.xlsx` |
+| Gainer | `scripts/entrypoints/run_gainer.py` | `Gainer.xlsx` |
+| 整体 | `scripts/entrypoints/run_overall.py` | `整体_processed.xlsx` |
+| 二级市场 | `scripts/pipelines/secondary_market_report.py` | `mixed_market_report_*.xlsx` |
+
+### 六、数据获取及计算方法
+
+#### 1. 统一指标口径
+
+- 日频可投资资产统一先计算 `pct_change()` 日收益率
+- 年化收益率统一通过 `src/asset_mgnt_report/metrics/annualization.py`
+- 年化波动率统一通过 `src/asset_mgnt_report/metrics/volatility.py`
+- Sharpe / Adjusted Sharpe 统一通过 `src/asset_mgnt_report/metrics/sharpe.py`
+- 地区无风险利率统一配置：
+  - `US = 0.045`
+  - `CN = 0.017`
+  - `HK = 0.0062`
+
+#### 2. CPI
+
+| 地区 | 数据类型 | 数据源说明 |
+| --- | --- | --- |
+| 美国 | 月度 CPI（MoM） | `akshare.macro_usa_cpi_monthly()` |
+| 美国 | 年度 CPI（YoY） | `akshare.macro_usa_cpi_yoy()` |
+| 美国 | 年度 PCE（YoY） | `akshare.macro_usa_core_pce_price()` |
+| 中国 | 月度 CPI（MoM） | `akshare.macro_china_cpi_monthly()` |
+| 中国 | 年度 CPI（YoY） | `akshare.macro_china_cpi_yearly()` |
+| 香港 | 年度&月度 CPI | 本地 Excel：`data/seeds/Table 510-60001_tc.xlsx` |
 
 $$
 \text{CAGR} = \left( \prod_{i=1}^{n} \left(1 + \frac{r_i}{100} \right) \right)^{\frac{1}{n}} - 1
 $$
 
-#### 2. GDP
+#### 3. GDP
 
-| 区域 | 数据        | 数据来源                                  |
-| ---- | ----------- | ----------------------------------------- |
-| 美国 | YoY(%)      | `akshare.macro_usa_gdp_monthly()`         |
-|      | 当前季度GDP | `fred.get_series('NGDPSAXDCUSQ')`         |
-|      | 当前年化GDP | `FRED API`：`series_id='GDP'`             |
-| 中国 | YoY(%)      | `akshare.macro_china_gdp_yearly()`        |
-|      | 当前季度GDP | `akshare.macro_china_gdp()`，计算季度差分 |
-|      | 当前年化GDP | 最近四个季度 GDP 差分求和                 |
-| 香港 | YoY(%)      | `akshare.macro_china_hk_gbp_ratio()`      |
-|      | 当前季度GDP | `akshare.macro_china_hk_gbp()`            |
-|      | 当前年化GDP | 最近四个季度 GDP 求和                     |
+| 区域 | 数据 | 数据来源 |
+| --- | --- | --- |
+| 美国 | YoY(%) | `akshare.macro_usa_gdp_monthly()` |
+| 美国 | 当前季度 GDP | `fred.get_series('NGDPSAXDCUSQ')` |
+| 美国 | 当前年化 GDP | `FRED API`：`series_id='GDP'` |
+| 中国 | YoY(%) | `akshare.macro_china_gdp_yearly()` |
+| 中国 | 当前季度 GDP | `akshare.macro_china_gdp()`，计算季度差分 |
+| 中国 | 当前年化 GDP | 最近四个季度 GDP 差分求和 |
+| 香港 | YoY(%) | `akshare.macro_china_hk_gbp_ratio()` |
+| 香港 | 当前季度 GDP | `akshare.macro_china_hk_gbp()` |
+| 香港 | 当前年化 GDP | 最近四个季度 GDP 求和 |
 
-$$
-\text{CAGR} = \left( \prod_{i=1}^{n} \left(1 + \frac{r_i}{100} \right) \right)^{\frac{1}{n}} - 1
-$$
+#### 4. 利率与利差
 
-#### 3. interest rate
-| 区域 | 利率久期                 | 数据来源                                  |
-| -- | -------------------- | ---------------------------------------- |
-| 美国 | US Federal Fund Rate | `akshare.macro_bank_usa_interest_rate()` |
-| 中国 | 中国央行LPR 1年           | `akshare.macro_china_lpr()`              |
-|    | Chibor 隔夜            | `akshare.rate_interbank()`               |
-|    | Chibor 1月            | `akshare.rate_interbank()`               |
-| 香港 | HIBOR 隔夜             | `akshare.rate_interbank()`               |
-|    | HIBOR 1月             | `akshare.rate_interbank()`               |
-|    | HIBOR人民币 1月          | `akshare.rate_interbank()`               |
+- 利率：
+  - 美国：Federal Fund Rate
+  - 中国：LPR、Chibor
+  - 香港：HIBOR
+- 利差：
+  - `CNH - USD`
+  - `HKD - USD`
+  - `CNH - HKD`
 
-$$
-\text{MoM(%)}
-= \left( \frac{r_{\text{now}} - r_{\text{prev}}}{r_{\text{prev}}} \right) \times 100
-$$
+MoM、YoY 算法均使用共享容忍窗口逻辑。
 
-$$
-\text{YoY(\%)} = \left( \frac{r_{\mathrm{now}} - r_{\mathrm{last\_year}}}{r_{\mathrm{last\_year}}} \right) \times 100
-$$
+#### 5. 汇率
 
-- r_prev 设置了前推10天（MOM)或者前推30天（YOY）的容忍期
+| 汇率 | 数据来源 |
+| --- | --- |
+| USD/CNH | `akshare.forex_hist_em()` |
+| USD/HKD | `akshare.forex_hist_em()` |
+| CNH/HKD | 由 USD/CNH 与 USD/HKD 跨式计算 |
 
-#### 4. carry_trade 货币利差
-$$
-\text{CNH - USD} = r_{\text{CNH}} - r_{\text{USD}}
-$$
+#### 6. 股票权益
 
-$$
-\text{HKD - USD} = r_{\text{HKD}} - r_{\text{USD}}
-$$
+| 市场 | 指数名称 | 数据来源 |
+| --- | --- | --- |
+| 美国 | S&P 500 | `ak.index_us_stock_sina(symbol=".inx")` |
+| 中国 | 沪深300 | `ak.stock_zh_index_daily("sh000300")` |
+| 香港 | 恒生指数 | `ak.stock_hk_index_daily_sina("HSI")` |
 
-$$
-\text{CNH - HKD} = r_{\text{CNH}} - r_{\text{HKD}}
-$$
-
-#### 5. currency 货币利率
-| 汇率     | 数据来源                     |
-| ------- | -------------------------- |
-| USD/CNH | `akshare.forex_hist_em()`  |
-| USD/HKD | `akshare.forex_hist_em()`  |
-| CNH/HKD | 由 USD/CNH 与 USD/HKD 跨式计算生成 |
-
-MOM、YOY算法与前述基本一致，不再赘述；这里设置了±10天的容忍期
-
-#### 6. 股指市值
-| 市场 | 指数名称    | 数据来源                                                        |
-| -- | ------- | --------------------------------------------------------------- |
-| 美国 | S\&P500 | `akshare.index_stock_cons()`                                    |
-| 中国 | 沪深300   | `akshare.index_stock_cons()` + `akshare.stock_a_lg_amount_em()` |
-| 香港 | 恒生      | `akshare.stock_hk_index_info()`                                 |
-计算方法：所有指数成分股的市值求和
-
-#### 7. 股票权益
-
-| 市场 | 指数名称     | 数据来源                                    |
-| -- | -------- | --------------------------------------- |
-| 美国 | S\&P 500 | `ak.index_us_stock_sina(symbol=".inx")` |
-| 中国 | 沪深300    | `ak.stock_zh_index_daily("sh000300")`   |
-| 香港 | 恒生指数     | `ak.stock_hk_index_daily_sina("HSI")`   |
-
-- MOM、YOY计算方法同上，容忍周期分别为±3、±5天
-- 年化增长率：
-- - 短期（月）：使用算术平均
-
-$$
-r_{\text{ann}} = \bar{r}_{\text{daily}} \times 252
-$$
-
-- - 中期（半年）及以上：使用几何平均
-
-$$
-r_{\text{ann}} = \left( \frac{P_{\text{end}}}{P_{\text{start}}} \right)^{\frac{1}{t}} - 1
-$$
-
-- 年化波动率
+- 年化收益率统一使用共享函数，不再区分“短期算术、长期几何”的分裂实现
+- 年化波动率统一为：
 
 $$
 \sigma_{\text{ann}} = \sigma_{\text{daily}} \times \sqrt{252}
 $$
 
-- 夏普比率
+- Sharpe Ratio 统一为：
 
 $$
 \text{Sharpe Ratio} = \frac{r_{\text{ann}} - r_f}{\sigma_{\text{ann}}}
 $$
 
-#### 8. 债券
+#### 7. 债券
 
 **中国国债**
 
-| 指标类型 | 数据项          | 数据来源                                                  |
-| ---- | ------------ | ----------------------------------------------------- |
-| 总市值  | 国债托管面值       | `ak.bond_cash_summary_sse(date=...)`（单位：亿元，换算为 B CNY） |
-| 交易量  | 记账式国债当日成交金额  | `ak.bond_deal_summary_sse(date=...)`（单位：万元，换算为 B CNY） |
-|      | 近30日总成交金额    | `ak.bond_deal_summary_sse()` 按债券类型汇总                  |
-| 收益率  | 2年、10年期国债收益率 | `ak.bond_zh_us_rate()`（字段：中国国债收益率2年 / 10年）            |
+| 指标类型 | 数据项 | 数据来源 |
+| --- | --- | --- |
+| 总市值 | 国债托管面值 | `ak.bond_cash_summary_sse(date=...)` |
+| 交易量 | 记账式国债当日成交金额 | `ak.bond_deal_summary_sse(date=...)` |
+| 收益率 | 2年、10年期国债收益率 | `ak.bond_zh_us_rate()` |
 
 **美国国债**
 
-| 指标类型 | 数据项          | 数据来源                                                         |
-| ---- | ------------ | ------------------------------------------------------------ |
-| 总市值  | 国债总额         | `fred.get_series('GFDEBTN')`（单位：百万美元，换算为 B USD）              |
-| 收益率  | 2年、10年期国债收益率 | `pandas_datareader.data.DataReader()`，FRED 代码：`DGS2`、`DGS10` |
+| 指标类型 | 数据项 | 数据来源 |
+| --- | --- | --- |
+| 总市值 | 国债总额 | `fred.get_series('GFDEBTN')` |
+| 收益率 | 2年、10年期国债收益率 | `pandas_datareader.data.DataReader()` |
 
-#### 9. 商品与贵金属
+#### 8. 商品与贵金属
 
-| 标的代码 | 品类    | 数据来源                                           |
-| ---- | ----- | ---------------------------------------------- |
-| GLD  | 黄金ETF | `yfinance.Ticker("GLD").history(period="6y")`  |
-| CL=F | 原油期货  | `yfinance.Ticker("CL=F").history(period="6y")` |
-| HG=F | 铜期货   | `yfinance.Ticker("HG=F").history(period="6y")` |
+| 标的代码 | 品类 | 数据来源 |
+| --- | --- | --- |
+| GLD | 黄金 ETF | `yfinance.Ticker("GLD").history(period="6y")` |
+| CL=F | 原油期货 | `yfinance.Ticker("CL=F").history(period="6y")` |
+| HG=F | 铜期货 | `yfinance.Ticker("HG=F").history(period="6y")` |
 
+#### 9. 整体
 
-#### 10. 整体
-- 收益率
-  - 短期-月收益率：近一月的日收益率线性平均，再年化。monthly_return = data['Return'].mean() * 252
-  - 中长期-季度及更长时间：复利。
-          years = days / 365.25  # 计算周期为几年，如季度收益率，days = 90，years=0.25，0.25年
-          return = (1 + total_return)  (1 / years) - 1
-- 波动率：std(return) * 252 ** 0.5
-- Sharp ratio: ( 年化return - risk free return ) / volatility
-  - Risk free return: 当地债券固收的月收益率年化，香港用0.0062
-- Adjusted Sharp ratio: ( 年化return + 汇率收益率（YOY) - risk free return ) / volatility
-  - Risk free return: 统一使用美国债券固收的月收益率年化
-  - 以USD-CHN为例，汇率值为7.1891，YOY为0.0584559284054055%，则从超额收益中扣减0.0584%；但是由于货币MOM一般较小，对sharp ratio的影响也较小
-  ”整体“表格中，波动率和 Sharp Ratio 均使用月度数据
+- 波动率和 Sharpe Ratio 统一使用月度数据
+- `Adjusted Sharpe` 统一通过共享函数计算
+- 汇率修正逻辑仍保留，但实现已收敛到统一算法层
 
-### 五、工程化重构补充（2026-04-12 追加）
+### 七、Docker 与 Web UI
 
-#### 1. 新项目结构
-- `src/asset_mgnt_report/`：统一配置、共享指标函数、运行服务、Web UI
-- `data/seeds/`：纳入版本控制的种子数据
-- `data/local/`：本地临时输入，不纳入版本控制
-- `archive/legacy_code/`：原 `old code/` 历史归档
-- `tests/`：统一指标算法测试
-- `docs/`：验证与对比报告
+- Docker 适合：
+  - 跨设备迁移
+  - 给不会 Python 的协作者直接使用
+  - 固定依赖环境，减少“我这里能跑、别人那里不能跑”
+- Web UI 适合：
+  - 在页面中勾选模块
+  - 不直接改代码
+  - 运行主报表 / Gainer / 整体 / 校验
 
-#### 2. 统一指标口径
-- 日频资产统一先计算 `pct_change()` 日收益率，再进入共享年化、波动率、Sharpe 计算函数
-- 年化收益率统一通过 `src/asset_mgnt_report/metrics/annualization.py`
-- 年化波动率统一通过 `src/asset_mgnt_report/metrics/volatility.py`
-- Sharpe 与 Adjusted Sharpe 统一通过 `src/asset_mgnt_report/metrics/sharpe.py`
-- 地区无风险利率统一由配置集中管理：`US=0.045`、`CN=0.017`、`HK=0.0062`
-
-#### 3. 配置方式
-- 根目录兼容入口文件保留，但改为“顶部 `CONFIG` + 环境变量覆盖”的形式
-- Docker、自动化和 Streamlit Web UI 均复用同一套配置
-- 示例环境变量见 `.env.example`
-
-#### 4. Web UI
-- 启动方式：`streamlit run src/asset_mgnt_report/ui/streamlit_app.py`
-- 可在页面中统一配置 debug、代理、主报表模块，并触发主报表、Gainer、整体表和全量校验
-
-#### 5. Docker
-- 构建：`docker build -t asset-mgnt-report .`
-- 默认入口：`python main.py`
-- `data/local/` 与 `output/` 建议通过 volume 挂载
-
-#### 6. 验证
-- 单元测试：`python -m pytest tests/test_metrics.py`
-- main/codex 对比：`python tools_validate.py`
-- 对比报告输出到 `docs/重构前后对比报告.md`
+建议阅读：
+- `docs/docker部署与使用指南.md`
+- `docs/重构前后对比报告.md`

@@ -1,36 +1,33 @@
 from __future__ import annotations
 
 from importlib import import_module
-from pathlib import Path
 import runpy
 from typing import Callable
 
 
 MODULE_RUNNERS: dict[str, tuple[str, str | None]] = {
-    "cpi": ("cpi", "main"),
-    "gdp": ("GDP_new", "main"),
-    "interest_rate": ("interest_rate", "main"),
-    "carry_trade": ("carry_trade", "main"),
-    "stock_index": ("asset_stock_index", "main"),
-    "currency": ("currency", "main"),
-    "precious_metals": ("precious_metals.py", None),
-    "bonds": ("bonds", "main"),
-    "crypto": ("crypto_market_report", "main"),
-    "gainer": ("Gainer", "main"),
-    "overall": ("整体.py", None),
-    "secondary_market": ("stock_us_cn_hk/market_report_china_hk_2weeks.py", None),
+    "cpi": ("scripts.pipelines.cpi_report", "main"),
+    "gdp": ("scripts.pipelines.gdp_report", "main"),
+    "interest_rate": ("scripts.pipelines.interest_rate_report", "main"),
+    "carry_trade": ("scripts.pipelines.carry_trade_report", "main"),
+    "stock_index": ("scripts.pipelines.stock_index_report", "main"),
+    "currency": ("scripts.pipelines.fx_report", "main"),
+    "precious_metals": ("scripts.pipelines.precious_metals_report", None),
+    "bonds": ("scripts.pipelines.bond_report", "main"),
+    "crypto": ("scripts.pipelines.crypto_report", "main"),
+    "gainer": ("scripts.entrypoints.run_gainer", "main"),
+    "overall": ("scripts.entrypoints.run_overall", "main"),
+    "secondary_market": ("scripts.pipelines.secondary_market_report", None),
 }
 
 
 def get_runner(name: str) -> Callable:
     module_name, attr = MODULE_RUNNERS[name]
     if attr is None:
-        script_path = Path(module_name)
+        def _run_module(**_: object) -> None:
+            runpy.run_module(module_name, run_name="__main__")
 
-        def _run_script(**_: object) -> None:
-            runpy.run_path(str(script_path), run_name="__main__")
-
-        return _run_script
+        return _run_module
     module = import_module(module_name)
     return getattr(module, attr)
 

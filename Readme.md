@@ -130,6 +130,7 @@ docker compose run --rm amr-cli python -m scripts.validation.validate_outputs
 
 更完整的 Docker 说明见：
 - `docs/docker部署与使用指南.md`
+- `docs/版本迭代日志.md`
 
 #### 4. 输出位置
 
@@ -155,7 +156,8 @@ docker compose run --rm amr-cli python -m scripts.validation.validate_outputs
 - `data/local/`：本地临时输入，不纳入版本控制
 - `output/`：运行输出
 - `archive/legacy_code/`：历史脚本归档
-- `docs/`：说明文档与对比报告
+- `archive/legacy_code/stock_us_cn_hk/`：原二级市场独立目录归档与历史产物留档
+- `docs/`：说明文档、版本日志与对比报告
 
 ### 五、输出文件说明
 
@@ -302,4 +304,5 @@ $$
 
 建议阅读：
 - `docs/docker部署与使用指南.md`
+- `docs/版本迭代日志.md`
 - `docs/重构前后对比报告.md`

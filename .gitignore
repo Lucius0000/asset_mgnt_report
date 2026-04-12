@@ -13,7 +13,7 @@ env/
 output/
 tmp/
 data/local/
-stock_us_cn_hk/mixed_market_report_*.xlsx
+archive/legacy_code/stock_us_cn_hk/mixed_market_report_*.xlsx
 *.tmp
 *.bak
 *.swp

@@ -86,6 +86,124 @@ docker build -t asset-mgnt-report .
 - 复制项目代码到镜像里
 - 生成一个名为 `asset-mgnt-report` 的本地镜像
 
+## 5.1 当前项目对应的 Dockerfile 占用空间及位置
+
+以下数据为当前机器在 `2026-04-12` 的实测结果：
+
+- `Dockerfile` 文件位置：
+  - `C:\Users\Lucius\Desktop\asset_mgnt_report\codex\Dockerfile`
+- `Dockerfile` 文件大小：
+  - `448 Bytes`
+- 当前项目已构建镜像：
+  - `asset-mgnt-report:latest`
+  - `asset-mgnt-report:test`
+- 每个镜像显示大小：
+  - `1.53 GB`
+
+需要注意两点：
+
+- `Dockerfile` 本身只是一个很小的文本文件，几乎不占空间
+- 真正占空间的是它构建出来的镜像、容器和 Build Cache
+
+当前项目镜像数据实际存放在 Docker Desktop 的数据盘里，而不是直接散落在项目目录中：
+
+- Docker Desktop 数据盘：
+  - `C:\Users\Lucius\AppData\Local\Docker\wsl\disk\docker_data.vhdx`
+
+## 5.2 项目修改后，什么时候需要改 Dockerfile
+
+### 不需要修改 Dockerfile 的情况
+
+如果你改的是下面这些内容，通常**不需要改 Dockerfile**：
+
+- Python 脚本逻辑
+- `src/`、`scripts/` 下的算法和报表代码
+- `Readme.md`
+- `docs/`
+- `data/seeds/` 中的数据文件
+- Streamlit 页面逻辑
+- `compose.yaml` 以外的普通项目文件
+
+这类修改通常只需要重新构建镜像并重启容器：
+
+```powershell
+docker compose up -d --build amr-ui
+```
+
+### 可能需要修改 Dockerfile 的情况
+
+如果你改的是下面这些内容，就要考虑修改 Dockerfile：
+
+- 新增了 Python 依赖，且安装方式发生变化
+- 新增的依赖需要 Linux 系统库，例如：
+  - 编译器
+  - `libpng`
+  - `freetype`
+  - 数据库客户端库
+- 需要安装新的系统工具，例如：
+  - `git`
+  - `curl`
+  - `ffmpeg`
+- 想更换基础 Python 版本
+- 想改容器默认启动命令
+- 想改容器内部的工作目录、默认环境变量、暴露端口
+
+### 会自动修改吗
+
+不会。
+
+- Docker 不会根据你的项目代码自动改写 `Dockerfile`
+- `Dockerfile` 是你手工维护的一份构建说明书
+- 项目代码变了，Docker 最多只能在你重新构建时重新执行它，不能自己推断你要怎样改
+
+### 如果需要手动修改，怎么改
+
+常见修改方式如下：
+
+#### 1. 增加 Python 依赖
+
+一般先改：
+
+- `requirements.txt`
+
+如果只是普通 Python 包，通常不需要改 Dockerfile，只要重新构建：
+
+```powershell
+docker build -t asset-mgnt-report .
+```
+
+#### 2. 增加系统级依赖
+
+如果某个包在 Linux 里需要编译或依赖系统库，就要改 Dockerfile 里的 `apt-get install` 段，例如：
+
+```dockerfile
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        pkg-config \
+        libfreetype6-dev \
+        libpng-dev \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+#### 3. 修改默认启动命令
+
+如果你想把默认启动从主报表改成 Web UI 或别的脚本，需要改 Dockerfile 末尾的 `CMD`，或者改 `compose.yaml` 中的 `command`
+
+### 修改后怎么应用
+
+修改 `Dockerfile` 或 `requirements.txt` 后，不会自动生效，必须重新构建镜像并重建容器：
+
+```powershell
+docker compose up -d --build amr-ui
+```
+
+如果只想更新镜像、不立即启动，也可以：
+
+```powershell
+docker build -t asset-mgnt-report .
+```
+
 ## 6. 启动 Web UI
 
 推荐方式：
@@ -209,6 +327,121 @@ docker run --rm asset-mgnt-report python -m scripts.entrypoints.run_main
 - 适合不熟悉开发环境的人
 - 对方不用重新安装 Python 依赖
 - 只需要 Docker
+
+## 11.1 当前电脑的 Docker 程序总占用空间及位置
+
+以下数据为当前机器在 `2026-04-12` 的实测结果：
+
+### 1. Docker Desktop 程序安装目录
+
+- 路径：
+  - `C:\Program Files\Docker`
+- 当前目录大小：
+  - `3.63 GB`
+
+这部分主要是：
+
+- Docker Desktop 程序本体
+- CLI 插件
+- 内置组件
+
+### 2. Docker 数据盘
+
+- 路径：
+  - `C:\Users\Lucius\AppData\Local\Docker\wsl\disk\docker_data.vhdx`
+- 当前文件大小：
+  - `4.02 GB`
+
+这部分主要存放：
+
+- 镜像层
+- 容器可写层
+- Build Cache
+- Docker 内部数据
+
+### 3. 当前 Docker 内部对象占用
+
+根据 `docker system df` 的结果：
+
+- Images：
+  - `2.572 GB`
+- Containers：
+  - `23.36 MB`
+- Local Volumes：
+  - `0 B`
+- Build Cache：
+  - `1.396 GB`
+
+### 4. 当前已知总占用
+
+如果按“程序安装目录 + 数据盘”粗略估算，当前机器 Docker 相关占用约为：
+
+- `3.63 GB + 4.02 GB ≈ 7.65 GB`
+
+注意：
+
+- 这是当前时点的实测值，不是固定值
+- 以后构建更多镜像、产生更多缓存后，这个数字还会继续增长
+
+## 11.2 当前电脑的 Docker 配置
+
+以下为当前机器的关键 Docker 配置快照：
+
+### Docker Engine / Desktop
+
+- Docker Server Version：
+  - `29.0.1`
+- 运行环境：
+  - `Docker Desktop`
+- 容器类型：
+  - `Linux`
+- 架构：
+  - `x86_64`
+- Storage Driver：
+  - `overlayfs`
+- Docker Root Dir：
+  - `/var/lib/docker`
+
+### 资源配置
+
+- 可用 CPU：
+  - `16`
+- 可用内存：
+  - `8187473920 Bytes`，约 `7.62 GB`
+
+### 代理配置
+
+- HTTP Proxy：
+  - 已配置
+- HTTPS Proxy：
+  - 已配置
+- No Proxy：
+  - 已配置 Docker 内部域名例外规则
+
+### Docker Desktop 用户设置文件
+
+- 路径：
+  - `C:\Users\Lucius\AppData\Roaming\Docker\settings-store.json`
+
+当前能确认的关键设置包括：
+
+- `AutoStart = false`
+- `EnableDockerAI = true`
+- `UseContainerdSnapshotter = true`
+
+### 本项目当前 compose 运行方式
+
+- 服务数量：
+  - `2`
+- 服务名称：
+  - `amr-ui`
+  - `amr-cli`
+- 对外端口：
+  - `8501`
+- 挂载目录：
+  - `./data/local -> /app/data/local`
+  - `./output -> /app/output`
+  - `../main -> /baseline_main`（只读，用于 main / codex 对比）
 
 ## 12. 常见问题
 

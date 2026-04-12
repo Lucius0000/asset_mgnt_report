@@ -20,4 +20,4 @@ COPY . .
 
 EXPOSE 8501
 
-CMD ["python", "-m", "scripts.entrypoints.run_main"]
+CMD ["python", "-m", "scripts.main"]

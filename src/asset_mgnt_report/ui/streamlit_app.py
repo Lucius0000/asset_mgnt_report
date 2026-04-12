@@ -59,12 +59,12 @@ if col1.button("运行主报表", use_container_width=True):
     st.markdown("\n\n".join(logs))
 
 if col2.button("运行 Gainer", use_container_width=True):
-    code, output = _run_script("scripts.entrypoints.run_gainer")
+    code, output = _run_script("scripts.gainer")
     st.code(output, language="text")
     st.write(f"exit code: {code}")
 
 if col3.button("运行整体表", use_container_width=True):
-    code, output = _run_script("scripts.entrypoints.run_overall")
+    code, output = _run_script("scripts.overall")
     st.code(output, language="text")
     st.write(f"exit code: {code}")
 

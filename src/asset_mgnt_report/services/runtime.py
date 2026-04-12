@@ -15,8 +15,8 @@ MODULE_RUNNERS: dict[str, tuple[str, str | None]] = {
     "precious_metals": ("scripts.pipelines.precious_metals_report", None),
     "bonds": ("scripts.pipelines.bond_report", "main"),
     "crypto": ("scripts.pipelines.crypto_report", "main"),
-    "gainer": ("scripts.entrypoints.run_gainer", "main"),
-    "overall": ("scripts.entrypoints.run_overall", "main"),
+    "gainer": ("scripts.gainer", "main"),
+    "overall": ("scripts.overall", "main"),
     "secondary_market": ("scripts.pipelines.secondary_market_report", None),
 }
 

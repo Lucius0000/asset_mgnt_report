@@ -2,7 +2,7 @@ services:
   amr-ui:
     build: .
     image: asset-mgnt-report
-    command: streamlit run scripts/entrypoints/run_streamlit.py --server.address=0.0.0.0 --server.port=8501
+    command: streamlit run scripts/web_ui.py --server.address=0.0.0.0 --server.port=8501
     ports:
       - "8501:8501"
     volumes:
@@ -16,7 +16,7 @@ services:
   amr-cli:
     build: .
     image: asset-mgnt-report
-    command: python -m scripts.entrypoints.run_main
+    command: python -m scripts.main
     volumes:
       - ../main:/baseline_main:ro
       - ./data/local:/app/data/local

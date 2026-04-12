@@ -231,19 +231,19 @@ http://localhost:8501
 ### 运行主报表
 
 ```powershell
-docker compose run --rm amr-cli python -m scripts.entrypoints.run_main
+docker compose run --rm amr-cli python -m scripts.main
 ```
 
 ### 运行 Gainer
 
 ```powershell
-docker compose run --rm amr-cli python -m scripts.entrypoints.run_gainer
+docker compose run --rm amr-cli python -m scripts.gainer
 ```
 
 ### 运行整体表
 
 ```powershell
-docker compose run --rm amr-cli python -m scripts.entrypoints.run_overall
+docker compose run --rm amr-cli python -m scripts.overall
 ```
 
 ### 运行回归校验
@@ -306,13 +306,13 @@ docker compose up amr-ui
 或：
 
 ```powershell
-docker run --rm asset-mgnt-report python scripts/entrypoints/run_main.py
+docker run --rm asset-mgnt-report python scripts/main.py
 ```
 
 更稳妥的模块运行方式是：
 
 ```powershell
-docker run --rm asset-mgnt-report python -m scripts.entrypoints.run_main
+docker run --rm asset-mgnt-report python -m scripts.main
 ```
 
 ## 11. 源码分享和镜像分享的区别
@@ -511,8 +511,8 @@ Docker 和 GitHub 是两件事：
 ```powershell
 docker build -t asset-mgnt-report .
 docker compose up amr-ui
-docker compose run --rm amr-cli python scripts/entrypoints/run_main.py
-docker compose run --rm amr-cli python -m scripts.entrypoints.run_main
+docker compose run --rm amr-cli python scripts/main.py
+docker compose run --rm amr-cli python -m scripts.main
 docker save -o asset-mgnt-report.tar asset-mgnt-report
 docker load -i asset-mgnt-report.tar
 ```

@@ -2,7 +2,7 @@
 
 - `asset_mgnt_report` 用于生成资产管理周报相关数据，覆盖 CPI、GDP、利率、利差、汇率、股票权益、债券、商品与贵金属、数字货币，以及二级市场补充报表。
 - 项目已经工程化为三层：
-  - 根目录兼容入口：保留 `main.py`、`Gainer.py`、`整体.py`
+  - 根目录工程配置：保留 Docker、依赖、说明文档和版本控制配置
   - `scripts/`：正式脚本入口、资产管线脚本、校验脚本
   - `src/asset_mgnt_report/`：统一配置、共享算法、运行调度、Web UI
 - 运行输出默认写入 `output/`，便于复核、对比和二次加工。
@@ -64,19 +64,19 @@ $env:FRED_API_KEY="your_fred_api_key"
 - 一键运行主报表：
 
 ```powershell
-python main.py
+python scripts/main.py
 ```
 
 - 运行 Gainer 汇总：
 
 ```powershell
-python Gainer.py
+python scripts/gainer.py
 ```
 
 - 运行整体表：
 
 ```powershell
-python 整体.py
+python scripts/overall.py
 ```
 
 - 运行二级市场补充报表：
@@ -85,12 +85,49 @@ python 整体.py
 python -m scripts.pipelines.secondary_market_report
 ```
 
-#### 2. Web UI 运行
+#### 2. 参数配置
+
+参数配置有三层优先级，从高到低依次为：
+
+1. 环境变量
+2. 入口脚本顶部的 `CONFIG`
+3. `src/asset_mgnt_report/config/defaults.py` 中的默认配置
+
+最常改的是 `scripts/` 下四个入口脚本顶部的 `CONFIG`：
+
+- `scripts/main.py`
+  - `debug`
+  - `modules`
+- `scripts/gainer.py`
+  - `current_date`
+  - `previous_date`
+  - `current_gold_price`
+  - `previous_gold_price`
+- `scripts/overall.py`
+  - `input_path`
+  - `output_path`
+  - `log_path`
+- `scripts/web_ui.py`
+  - Web UI 本身不单独维护参数，直接复用统一配置
+
+环境变量适合 Docker 和自动化场景，常用项包括：
+
+- `AMR_DEBUG`
+- `AMR_USE_PROXY`
+- `AMR_HTTP_PROXY`
+- `AMR_HTTPS_PROXY`
+- `FRED_API_KEY`
+- `AMR_GAINER_CURRENT_DATE`
+- `AMR_GAINER_PREVIOUS_DATE`
+- `AMR_GOLD_CURRENT_PRICE`
+- `AMR_GOLD_PREVIOUS_PRICE`
+
+#### 3. Web UI 运行
 
 - 启动方式：
 
 ```powershell
-streamlit run scripts/entrypoints/run_streamlit.py
+streamlit run scripts/web_ui.py
 ```
 
 - 默认访问地址：
@@ -102,7 +139,7 @@ streamlit run scripts/entrypoints/run_streamlit.py
   - 运行主报表、Gainer、整体表
   - 触发 main / codex 输出校验
 
-#### 3. Docker 运行
+#### 4. Docker 运行
 
 - 构建镜像：
 
@@ -119,7 +156,7 @@ docker compose up amr-ui
 - 在容器中运行主报表：
 
 ```powershell
-docker compose run --rm amr-cli python -m scripts.entrypoints.run_main
+docker compose run --rm amr-cli python -m scripts.main
 ```
 
 - 在容器中运行校验：
@@ -132,7 +169,7 @@ docker compose run --rm amr-cli python -m scripts.validation.validate_outputs
 - `docs/docker部署与使用指南.md`
 - `docs/版本迭代日志.md`
 
-#### 4. 输出位置
+#### 5. 输出位置
 
 - 主输出目录：`output/`
 - 原始调试数据：`output/raw_data/`
@@ -140,10 +177,10 @@ docker compose run --rm amr-cli python -m scripts.validation.validate_outputs
 
 ### 四、项目结构
 
-- `main.py`：主报表兼容入口
-- `Gainer.py`：Gainer 兼容入口
-- `整体.py`：整体表兼容入口
-- `scripts/entrypoints/`：正式入口脚本
+- `scripts/main.py`：主报表入口
+- `scripts/gainer.py`：Gainer 入口
+- `scripts/overall.py`：整体表入口
+- `scripts/web_ui.py`：Web UI 启动入口
 - `scripts/pipelines/`：各资产大类与报表脚本
 - `scripts/validation/`：回归与对比校验脚本
 - `src/asset_mgnt_report/`
@@ -173,8 +210,8 @@ docker compose run --rm amr-cli python -m scripts.validation.validate_outputs
 | 债券 | `scripts/pipelines/bond_report.py` | `bonds.xlsx` |
 | 商品与贵金属 | `scripts/pipelines/precious_metals_report.py` | `commodity_indicators_summary.xlsx` |
 | 数字货币 | `scripts/pipelines/crypto_report.py` | `crypto_metrics.xlsx` |
-| Gainer | `scripts/entrypoints/run_gainer.py` | `Gainer.xlsx` |
-| 整体 | `scripts/entrypoints/run_overall.py` | `整体_processed.xlsx` |
+| Gainer | `scripts/gainer.py` | `Gainer.xlsx` |
+| 整体 | `scripts/overall.py` | `整体_processed.xlsx` |
 | 二级市场 | `scripts/pipelines/secondary_market_report.py` | `mixed_market_report_*.xlsx` |
 
 ### 六、数据获取及计算方法

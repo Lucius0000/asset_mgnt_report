@@ -1,0 +1,11 @@
+﻿ticker,missing_old,missing_new,retried,recovered_old,recovered_new
+ABNB,0,0,1,1,1
+APD,0,0,1,1,1
+D,0,0,1,0,1
+FAST,0,0,1,1,1
+FRT,0,0,1,1,1
+GD,0,0,1,1,1
+IPG,1,1,1,0,0
+K,1,1,1,0,0
+MCO,0,0,1,0,1
+WBA,1,1,1,0,0

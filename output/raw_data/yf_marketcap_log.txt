@@ -1,0 +1,19 @@
+2025-11-10 01:47:26,757 | INFO | HS300 method stats: {'get_info': 300}
+2025-11-10 01:52:37,984 | ERROR | 0016.HK: Yahoo web request for share count failed
+2025-11-10 01:54:05,245 | INFO | HSI method stats: {'get_info': 88}
+2025-11-10 08:46:45,369 | ERROR | $000001.SZ: possibly delisted; no price data found  (period=5d)
+2025-11-10 08:46:47,421 | ERROR | 000001.SZ: Yahoo web request for share count failed
+2025-11-10 08:46:51,505 | ERROR | $000002.SZ: possibly delisted; no price data found  (period=5d)
+2025-11-10 08:46:53,558 | ERROR | 000002.SZ: Yahoo web request for share count failed
+2025-11-10 08:48:53,857 | INFO | HS300 method stats: {'get_info': 297, 'fail': 2, 'calc': 1}
+2025-11-10 08:49:26,707 | INFO | HSI method stats: {'get_info': 88}
+2025-11-10 08:52:25,770 | ERROR | HTTP Error 404: 
+2025-11-10 08:52:26,612 | ERROR | $WBA: possibly delisted; no price data found  (period=5d) (Yahoo error = "No data found, symbol may be delisted")
+2025-11-10 08:52:34,990 | INFO | S&P500 method stats: {'get_info': 502, 'fail': 1}
+2025-11-10 09:47:04,211 | INFO | Starting stock index analysis... (time_range=2920 days, debug=False)
+2025-11-10 09:49:13,845 | INFO | HS300 method stats: {'get_info': 300}
+2025-11-10 09:53:29,464 | ERROR | HTTP Error 404: 
+2025-11-10 09:53:30,387 | ERROR | $WBA: possibly delisted; no price data found  (period=5d) (Yahoo error = "No data found, symbol may be delisted")
+2025-11-10 09:53:53,971 | INFO | S&P500 method stats: {'get_info': 502, 'fail': 1}
+2025-11-10 09:55:15,803 | INFO | HSI method stats: {'get_info': 88}
+2025-11-10 09:55:15,867 | INFO | Weekly report exported to output/stock_weekly_report.xlsx

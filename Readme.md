@@ -37,16 +37,16 @@ $env:FRED_API_KEY="your_fred_api_key"
 - 香港 CPI：[政府統計處 : 表510-60001：消費物價指數](https://www.censtatd.gov.hk/tc/web_table.html?full_series=1&id=510-60001#)
   - 需要选择“完整数列”，下载长周期完整数据
   - 删去按年计算的 CPI，仅保留按月结果
-![CPI_HK 获取图](assets/CPI_HK.png)
+![CPI_HK 获取图](docs/assets/CPI_HK.png)
 
 - 恒生指数成分股：[指數及成份股 - 指數成份股 - 恆生指數](http://www.aastocks.com/tc/stocks/market/index/hk-index-con.aspx?index=HSI)
-![HSI_CAP 获取图](assets/HSI_CAP.png)
+![HSI_CAP 获取图](docs/assets/HSI_CAP.png)
 
 - 美国财政部流通国债总票面价值：[U.S. Treasury Monthly Statement of the Public Debt (MSPD)](https://fiscaldata.treasury.gov/datasets/monthly-statement-public-debt/summary-of-treasury-securities-outstanding)
-![MSPD获取图](assets/MSPD.png)
+![MSPD获取图](docs/assets/MSPD.png)
 
 - 沪深300成分股名录：[沪深300指数 (000300)](https://www.csindex.com.cn/uploads/file/autofile/cons#/indices/family/detail?indexCode=000300)
-![HS300_list获取图](assets/HS300_list.png)
+![HS300_list获取图](docs/assets/HS300_list.png)
 
 #### 4. “整体”表格准备
 
@@ -55,7 +55,7 @@ $env:FRED_API_KEY="your_fred_api_key"
 - 然后再执行 `整体.py`
 
 整体表格整理示例：
-![整体表格整理示例](assets/整体_处理前.png)
+![整体表格整理示例](docs/assets/整体_处理前.png)
 
 ### 三、使用方法
 
@@ -157,6 +157,7 @@ docker compose run --rm amr-cli python -m scripts.validation.validate_outputs
 - `output/`：运行输出
 - `archive/legacy_code/`：历史脚本归档
 - `archive/legacy_code/stock_us_cn_hk/`：原二级市场独立目录归档与历史产物留档
+- `docs/assets/`：Readme 与文档使用的静态图片
 - `docs/`：说明文档、版本日志与对比报告
 
 ### 五、输出文件说明

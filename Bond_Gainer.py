@@ -5,14 +5,28 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+import os
 
 import akshare as ak
 import pandas as pd
 
-DATA_DIR = Path("data")
+from src.asset_mgnt_report.config.inputs import resolve_config_value
+
+DATA_DIR = Path("data") / "seeds"
+
+CONFIG = {
+    "target_date": None,
+}
 
 
 def _prompt_date(prompt: str) -> datetime:
+    configured = resolve_config_value(
+        explicit=CONFIG["target_date"],
+        env_key="AMR_BOND_TARGET_DATE",
+        caster=lambda raw: datetime.strptime(raw, "%Y-%m-%d"),
+    )
+    if configured is not None:
+        return configured
     while True:
         raw = input(prompt).strip()
         if not raw:

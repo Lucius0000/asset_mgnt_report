@@ -23,6 +23,11 @@ import yfinance as yf
 from matplotlib.colors import TwoSlopeNorm
 from datetime import datetime
 
+from src.asset_mgnt_report.metrics.annualization import annualized_return_from_returns
+from src.asset_mgnt_report.metrics.returns import relative_change, trailing_percentile
+from src.asset_mgnt_report.metrics.sharpe import sharpe_ratio as shared_sharpe_ratio
+from src.asset_mgnt_report.metrics.volatility import annualized_volatility
+
 # ========= 全局配置 =========
 # 在这里指定结束日期（如 "2025-08-11"），None 表示用今天
 END_DATE_STR = None
@@ -127,42 +132,26 @@ def compute_annualized_volatility(daily_returns: pd.Series, window_days: int) ->
     if len(sub) < 2:
         return float("nan")
     sub = sub.iloc[-window_days:] if len(sub) >= window_days else sub
-    return float(sub.std(ddof=1) * np.sqrt(ANNUALIZATION_DAYS))
+    return annualized_volatility(sub, periods_per_year=ANNUALIZATION_DAYS)
 
 def compute_annualized_return(daily_returns: pd.Series, window_days: int, is_long_term: bool = False) -> float:
     if daily_returns is None or daily_returns.empty or len(daily_returns) < 2:
         return float("nan")
     sub = daily_returns.dropna()
     sub = sub.iloc[-window_days:] if len(sub) >= window_days else sub
-    if is_long_term and len(sub) >= 30:
-        price_index = (1 + sub).cumprod()
-        total_return = price_index.iloc[-1] - 1
-        years = len(sub) / ANNUALIZATION_DAYS
-        return float((1 + total_return) ** (1 / years) - 1)
-    return float(sub.mean() * ANNUALIZATION_DAYS)
+    return annualized_return_from_returns(sub, periods_per_year=ANNUALIZATION_DAYS)
 
 def compute_sharpe_ratio(annualized_return: float, annualized_volatility: float, risk_free_rate: float = RISK_FREE_RATE) -> float:
     if (pd.isna(annualized_return) or pd.isna(annualized_volatility) or annualized_volatility == 0):
         return float("nan")
-    return (annualized_return - risk_free_rate) / annualized_volatility
+    return shared_sharpe_ratio(annualized_return, annualized_volatility, risk_free_rate)
 
 def compute_relative_change(price: pd.Series, lag_days: int) -> float:
-    if price is None or price.empty or len(price.dropna()) <= lag_days:
-        return float("nan")
-    prev = price.shift(lag_days).dropna().iloc[-1]
-    curr = price.dropna().iloc[-1]
-    if pd.isna(prev) or pd.isna(curr) or prev == 0:
-        return float("nan")
-    return float(curr / prev - 1.0)
+    return relative_change(price, lag_days)
 
 def compute_percentile_1y(price: pd.Series) -> float:
     """过去365天内当前收盘价的分位（0-1）。"""
-    if price is None or price.dropna().empty:
-        return float("nan")
-    win = price.dropna().iloc[-YEAR_WINDOW_DAYS:]
-    if len(win) < 2:
-        return float("nan")
-    return float(win.rank(pct=True).iloc[-1])
+    return trailing_percentile(price, YEAR_WINDOW_DAYS)
 
 def calculate_metrics(tickers: List[str] = None,
                       risk_free_rate: float = RISK_FREE_RATE,

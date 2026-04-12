@@ -17,19 +17,33 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
-import os
-os.environ['http_proxy'] = 'http://127.0.0.1:7890'
-os.environ['https_proxy'] = 'http://127.0.0.1:7890'
-
 import Bond_Gainer
 import Gold_Gainer
 import Stock_Gainer
+from src.asset_mgnt_report.config.defaults import build_app_config
+from src.asset_mgnt_report.config.inputs import resolve_config_value
 
 OUTPUT_PATH = Path("output") / "Gainer.xlsx"
 BTC_SCRIPT_PATH = Path("BTC_Gainer.py")
+APP_CONFIG = build_app_config()
+
+CONFIG = {
+    "current_date": None,
+    "previous_date": None,
+    "current_gold_price": None,
+    "previous_gold_price": None,
+}
 
 
 def _prompt_date(message: str, default: Optional[datetime] = None) -> datetime:
+    configured = resolve_config_value(
+        explicit=CONFIG["current_date"] if "本周末" in message else CONFIG["previous_date"],
+        env_key="AMR_GAINER_CURRENT_DATE" if "本周末" in message else "AMR_GAINER_PREVIOUS_DATE",
+        default=default,
+        caster=lambda raw: datetime.strptime(raw, "%Y-%m-%d"),
+    )
+    if configured is not None:
+        return configured
     while True:
         raw = input(message).strip()
         if not raw and default is not None:
@@ -208,8 +222,16 @@ def main() -> None:
 
     print("\n请提供 LBMA Gold Price PM（USD/oz）")
     print("src: https://www.lbma.org.uk/cn/prices-and-data#/")
-    current_gold_price = Gold_Gainer._prompt_price("本周末价格：")
-    previous_gold_price = Gold_Gainer._prompt_price("两周前周末价格：")
+    current_gold_price = Gold_Gainer._prompt_price(
+        "本周末价格：",
+        env_key="AMR_GOLD_CURRENT_PRICE",
+        configured=CONFIG["current_gold_price"],
+    )
+    previous_gold_price = Gold_Gainer._prompt_price(
+        "两周前周末价格：",
+        env_key="AMR_GOLD_PREVIOUS_PRICE",
+        configured=CONFIG["previous_gold_price"],
+    )
     
     date_old_str = previous_date.strftime("%Y-%m-%d")
     date_new_str = current_date.strftime("%Y-%m-%d")

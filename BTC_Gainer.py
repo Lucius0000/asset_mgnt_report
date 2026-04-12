@@ -2,7 +2,14 @@ from pycoingecko import CoinGeckoAPI
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 
+from src.asset_mgnt_report.config.inputs import resolve_config_value
+
 cg = CoinGeckoAPI()
+
+CONFIG = {
+    "old_date": None,
+    "new_date": None,
+}
 
 def _to_epoch_seconds(dt_utc):
     return int(dt_utc.replace(tzinfo=timezone.utc).timestamp())
@@ -59,9 +66,9 @@ def format_usd(x):
 def format_billion(x):
     return f"{x/1e9:,.2f} B"
 
-# ---- 交互：要求用户输入旧日期和新日期（YYYY-MM-DD）----
-old_date_str = input("请输入【旧日期】(YYYY-MM-DD): ").strip()
-new_date_str = input("请输入【新日期】(YYYY-MM-DD): ").strip()
+# ---- 优先读取配置/环境变量，其次回退到交互 ----
+old_date_str = resolve_config_value(explicit=CONFIG["old_date"], env_key="AMR_BTC_OLD_DATE") or input("请输入【旧日期】(YYYY-MM-DD): ").strip()
+new_date_str = resolve_config_value(explicit=CONFIG["new_date"], env_key="AMR_BTC_NEW_DATE") or input("请输入【新日期】(YYYY-MM-DD): ").strip()
 
 # 解析与校验
 try:

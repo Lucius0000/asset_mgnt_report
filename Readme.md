@@ -221,3 +221,39 @@ $$
   - Risk free return: 统一使用美国债券固收的月收益率年化
   - 以USD-CHN为例，汇率值为7.1891，YOY为0.0584559284054055%，则从超额收益中扣减0.0584%；但是由于货币MOM一般较小，对sharp ratio的影响也较小
   ”整体“表格中，波动率和 Sharp Ratio 均使用月度数据
+
+### 五、工程化重构补充（2026-04-12 追加）
+
+#### 1. 新项目结构
+- `src/asset_mgnt_report/`：统一配置、共享指标函数、运行服务、Web UI
+- `data/seeds/`：纳入版本控制的种子数据
+- `data/local/`：本地临时输入，不纳入版本控制
+- `archive/legacy_code/`：原 `old code/` 历史归档
+- `tests/`：统一指标算法测试
+- `docs/`：验证与对比报告
+
+#### 2. 统一指标口径
+- 日频资产统一先计算 `pct_change()` 日收益率，再进入共享年化、波动率、Sharpe 计算函数
+- 年化收益率统一通过 `src/asset_mgnt_report/metrics/annualization.py`
+- 年化波动率统一通过 `src/asset_mgnt_report/metrics/volatility.py`
+- Sharpe 与 Adjusted Sharpe 统一通过 `src/asset_mgnt_report/metrics/sharpe.py`
+- 地区无风险利率统一由配置集中管理：`US=0.045`、`CN=0.017`、`HK=0.0062`
+
+#### 3. 配置方式
+- 根目录兼容入口文件保留，但改为“顶部 `CONFIG` + 环境变量覆盖”的形式
+- Docker、自动化和 Streamlit Web UI 均复用同一套配置
+- 示例环境变量见 `.env.example`
+
+#### 4. Web UI
+- 启动方式：`streamlit run src/asset_mgnt_report/ui/streamlit_app.py`
+- 可在页面中统一配置 debug、代理、主报表模块，并触发主报表、Gainer、整体表和全量校验
+
+#### 5. Docker
+- 构建：`docker build -t asset-mgnt-report .`
+- 默认入口：`python main.py`
+- `data/local/` 与 `output/` 建议通过 volume 挂载
+
+#### 6. 验证
+- 单元测试：`python -m pytest tests/test_metrics.py`
+- main/codex 对比：`python tools_validate.py`
+- 对比报告输出到 `docs/重构前后对比报告.md`

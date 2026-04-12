@@ -46,7 +46,7 @@ os.environ['http_proxy'] = 'http://127.0.0.1:7890'
 os.environ['https_proxy'] = 'http://127.0.0.1:7890'
 
 # 目录
-DATA_DIR = "data"
+DATA_DIR = "data/seeds"
 RAW_DIR = os.path.join("output", "raw_data")
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(RAW_DIR, exist_ok=True)

@@ -1,10 +1,22 @@
 """Calculate the change in gold total market capitalization across two weekends."""
 
+from __future__ import annotations
+
+from src.asset_mgnt_report.config.inputs import resolve_config_value
+
 ABOVE_GROUND_STOCK_TONS = 216_265  # Modify as needed to reflect above-ground gold stock in tons.
 OZT_PER_TON = 32_150.7466
 
+CONFIG = {
+    "current_price": None,
+    "previous_price": None,
+}
 
-def _prompt_price(prompt: str) -> float:
+
+def _prompt_price(prompt: str, env_key: str | None = None, configured: float | None = None) -> float:
+    resolved = resolve_config_value(explicit=configured, env_key=env_key, caster=float)
+    if resolved is not None:
+        return resolved
     while True:
         user_input = input(prompt).strip()
         if not user_input:
@@ -32,8 +44,16 @@ def _format_billion_usd(value: float) -> str:
 
 def main() -> None:
     print("计算黄金总市值差值：本周末总市值 - 前两周周末总市值\n")
-    current_price = _prompt_price("请输入本周末的 LBMA Gold Price PM（USD/oz）：")
-    previous_price = _prompt_price("请输入前两周周末的 LBMA Gold Price PM（USD/oz）：")
+    current_price = _prompt_price(
+        "请输入本周末的 LBMA Gold Price PM（USD/oz）：",
+        env_key="AMR_GOLD_CURRENT_PRICE",
+        configured=CONFIG["current_price"],
+    )
+    previous_price = _prompt_price(
+        "请输入前两周周末的 LBMA Gold Price PM（USD/oz）：",
+        env_key="AMR_GOLD_PREVIOUS_PRICE",
+        configured=CONFIG["previous_price"],
+    )
 
     current_cap = _calc_total_market_cap(current_price)
     previous_cap = _calc_total_market_cap(previous_price)

@@ -137,7 +137,7 @@ def get_hs300_cap():
         )
 
     # 读取本地表格
-    file_path = "data/000300cons.xls"
+    file_path = "data/seeds/000300cons.xls"
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"未找到文件 {file_path}，请检查文件路径。")
 
@@ -205,7 +205,7 @@ def get_hsi_cap():
     需下载excel格式，放置在data文件夹下
     '''
     # 读取文件（仅作“成分股名录”，不再使用表内“市值”列）
-    files = glob.glob(os.path.join("data", "AASTOCKS_Export*.xlsx"))
+    files = glob.glob(os.path.join("data", "seeds", "AASTOCKS_Export*.xlsx"))
     if not files:
         raise FileNotFoundError("未找到匹配的 AASTOCKS_Export*.xlsx 文件")
     file_path = max(files, key=os.path.getmtime)
@@ -305,9 +305,9 @@ def get_spy_cap(debug = False):
 
     # 初始化路径
     sp500_url = "https://datahub.io/core/s-and-p-500-companies/r/constituents.csv"
-    local_backup = "data/constituents.csv"
+    local_backup = "data/seeds/constituents.csv"
     raw_data_dir = "output/raw_data"
-    os.makedirs("data", exist_ok=True)
+    os.makedirs("data/seeds", exist_ok=True)
     os.makedirs(raw_data_dir, exist_ok=True)
 
     # 获取标普500成分股列表

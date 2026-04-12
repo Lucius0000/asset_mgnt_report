@@ -1,0 +1,14 @@
+.git
+.git.pre_worktree_backup
+__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.venv
+venv
+env
+output
+tmp
+data/local
+archive/legacy_code
+archive/manual_input_房地产-半自动化表格.xlsx

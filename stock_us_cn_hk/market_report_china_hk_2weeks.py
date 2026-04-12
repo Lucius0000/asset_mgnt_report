@@ -12,6 +12,10 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 from dateutil.relativedelta import relativedelta  # 需要安装: pip install python-dateutil
 import time
 
+from src.asset_mgnt_report.metrics.annualization import annualized_return_from_returns
+from src.asset_mgnt_report.metrics.sharpe import sharpe_ratio as shared_sharpe_ratio
+from src.asset_mgnt_report.metrics.volatility import annualized_volatility
+
 os.environ['http_proxy'] = 'http://127.0.0.1:7890'
 os.environ['https_proxy'] = 'http://127.0.0.1:7890'
 
@@ -703,8 +707,7 @@ def get_standardized_annualized_volatility(symbol, end_date=None, period_days=25
 
             daily_return = hist['Close'].pct_change().dropna()
             if len(daily_return) > 0:
-                daily_vol = daily_return.std()
-                return daily_vol * np.sqrt(252)  # 年化波动率
+                return annualized_volatility(daily_return, periods_per_year=252)
     except Exception as e:
         print(f"计算年化波动率时出错：{symbol}，错误：{e}")
     return None
@@ -724,44 +727,25 @@ def get_standardized_sharpe_ratio(symbol, end_date=None, risk_free_rate=0.02):
         hist = stock.history(start=buffer_start, end=buffer_end, auto_adjust=True)
 
         if not hist.empty and len(hist) >= 252:  # 至少需要1年数据
-            # 计算1年年化收益率
-            start_price = hist.iloc[0]['Close']
-            end_price = hist.iloc[-1]['Close']
-            total_return = (end_price - start_price) / start_price
-
-            # 计算实际年数（基于交易日）
-            actual_days = len(hist)
-            years = actual_days / 252  # 转换为年数
-
-            # 年化收益率
-            annualized_return = (1 + total_return) ** (1 / years) - 1
-
             # 计算年化波动率
             daily_returns = hist['Close'].pct_change().dropna()
             if len(daily_returns) > 0:
-                annualized_vol = daily_returns.std() * np.sqrt(252)
+                annualized_return = annualized_return_from_returns(daily_returns, periods_per_year=252)
+                annualized_vol = annualized_volatility(daily_returns, periods_per_year=252)
 
                 if annualized_vol != 0:
-                    return (annualized_return - risk_free_rate) / annualized_vol
+                    return shared_sharpe_ratio(annualized_return, annualized_vol, risk_free_rate)
         elif not hist.empty and len(hist) >= 60:  # 如果数据不足1年但至少有60个交易日
             # 使用可用数据计算，但给出警告
             print(f"警告：{symbol} 的历史数据不足1年（{len(hist)}个交易日），夏普比率可能不够准确")
 
-            start_price = hist.iloc[0]['Close']
-            end_price = hist.iloc[-1]['Close']
-            total_return = (end_price - start_price) / start_price
-
-            actual_days = len(hist)
-            years = actual_days / 252
-
-            annualized_return = (1 + total_return) ** (1 / years) - 1
-
             daily_returns = hist['Close'].pct_change().dropna()
             if len(daily_returns) > 0:
-                annualized_vol = daily_returns.std() * np.sqrt(252)
+                annualized_return = annualized_return_from_returns(daily_returns, periods_per_year=252)
+                annualized_vol = annualized_volatility(daily_returns, periods_per_year=252)
 
                 if annualized_vol != 0:
-                    return (annualized_return - risk_free_rate) / annualized_vol
+                    return shared_sharpe_ratio(annualized_return, annualized_vol, risk_free_rate)
         else:
             print(f"警告：{symbol} 的历史数据不足，无法计算夏普比率")
 

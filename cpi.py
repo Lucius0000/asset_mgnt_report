@@ -74,7 +74,7 @@ def get_cpi_data(time_range=10):
         cn_cpi_yearly = ak.macro_china_cpi_yearly()
         # 香港CPI数据
         # hk_cpi_monthly = none # not available
-        files = glob.glob(os.path.join("data", "Table 510*.xlsx"))
+        files = glob.glob(os.path.join("data", "seeds", "Table 510*.xlsx"))
         if not files:
             raise FileNotFoundError("未找到匹配的 Table 510*.xlsx 文件")
         latest_file = max(files, key=os.path.getmtime)

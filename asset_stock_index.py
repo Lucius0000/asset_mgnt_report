@@ -16,6 +16,11 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Alignment
 from stock_cap import get_all_index_caps
 import time
+
+from src.asset_mgnt_report.metrics.annualization import annualized_return_from_prices
+from src.asset_mgnt_report.metrics.returns import compute_daily_returns
+from src.asset_mgnt_report.metrics.sharpe import sharpe_ratio as shared_sharpe_ratio
+from src.asset_mgnt_report.metrics.volatility import annualized_volatility
         
 
 # 设置日志
@@ -172,7 +177,7 @@ class StockIndexAnalyzer:
         """计算每日收益率"""
         # 按时间顺序计算收益率
         df_asc = df.sort_values('date', ascending=True)
-        df_asc['daily_return'] = df_asc['close(point)'].pct_change()
+        df_asc['daily_return'] = compute_daily_returns(df_asc['close(point)'])
         
         # 重新排序为降序
         return df_asc.sort_values('date', ascending=False)
@@ -211,25 +216,14 @@ class StockIndexAnalyzer:
         """计算年化收益率"""
         if data.empty or len(data) < 2:
             return None
-        
-        if period.is_long_term:
-            # 长期业绩：使用几何平均（尾减头）
-            start_price = data['close(point)'].iloc[-1]
-            end_price = data['close(point)'].iloc[0]
-            total_return = (end_price - start_price) / start_price
-            date_range = (data['date'].max() - data['date'].min()).days
-            years = date_range / 365.25
-            return (1 + total_return) ** (1 / years) - 1
-        else:
-            # 短期业绩：使用算术平均
-            daily_return_mean = data['daily_return'].mean()
-            return daily_return_mean * 252
+        ordered = data.sort_values('date', ascending=True)
+        return annualized_return_from_prices(ordered['close(point)'])
     
     def calculate_volatility(self, data: pd.DataFrame) -> Optional[float]:
         """计算年化波动率"""
         if data.empty or len(data) < 5:
             return None
-        return data['daily_return'].std() * np.sqrt(252)
+        return annualized_volatility(data['daily_return'])
     
     def calculate_sharpe_ratio(self, data: pd.DataFrame, annualized_return: Optional[float], risk_free_rate: float) -> Optional[float]:
         """计算夏普比率"""
@@ -240,7 +234,7 @@ class StockIndexAnalyzer:
         if annualized_volatility is None or annualized_volatility == 0:
             return None
         
-        return (annualized_return - risk_free_rate) / annualized_volatility
+        return shared_sharpe_ratio(annualized_return, annualized_volatility, risk_free_rate)
     
     def calculate_metrics(self, df: pd.DataFrame, market: str) -> Optional[Dict[str, Any]]:
         """计算所有指标"""

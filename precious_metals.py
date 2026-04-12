@@ -13,6 +13,10 @@ import math
 import logging
 import akshare as ak
 
+from src.asset_mgnt_report.metrics.annualization import annualized_return_from_returns
+from src.asset_mgnt_report.metrics.sharpe import sharpe_ratio as shared_sharpe_ratio
+from src.asset_mgnt_report.metrics.volatility import annualized_volatility
+
 # ====== 调试打印与日志 ======
 DEBUG = False  # 控制是否在控制台打印；日志文件始终写入
 output_folder = "output"
@@ -105,22 +109,18 @@ def calculate_annualized_return(data):
     closes = data.dropna()
     if len(closes) < 2:
         return np.nan
-    total_return = closes.iloc[-1] / closes.iloc[0] - 1.0
     returns = closes.pct_change().dropna()
-    N = len(returns)
-    if N <= 0:
+    if len(returns) <= 0:
         return np.nan
-    k = 252.0 / N
-    return (1.0 + total_return) ** k - 1.0
+    return annualized_return_from_returns(returns, periods_per_year=252)
 
 def calculate_annualized_volatility(returns):
-    std_daily = returns.dropna().std()
-    return std_daily * math.sqrt(252.0)
+    return annualized_volatility(returns, periods_per_year=252)
 
 def calculate_sharpe_ratio(ann_return, ann_vol, rf=0.045):
     if ann_vol is None or pd.isna(ann_vol) or ann_vol == 0:
         return np.nan
-    return (ann_return - rf) / ann_vol
+    return shared_sharpe_ratio(ann_return, ann_vol, rf)
 
 # ====== 通用指标计算（适配 price_col / volume_col / 类别与市值覆盖） ======
 def compute_indicators(
@@ -211,10 +211,8 @@ def compute_indicators(
         end_price_p = float(closes.iloc[-1])
         total_R = end_price_p / start_price - 1.0
         N = len(rets)
-        k = 252.0 / N
-        ann_ret = (1.0 + total_R) ** k - 1.0
-        std_daily = rets.std()
-        ann_vol = std_daily * math.sqrt(252.0)
+        ann_ret = annualized_return_from_returns(rets, periods_per_year=252)
+        ann_vol = annualized_volatility(rets, periods_per_year=252)
         sr = calculate_sharpe_ratio(ann_ret, ann_vol, rf=0.045)
 
         annualized_return_map[label] = ann_ret
@@ -222,7 +220,7 @@ def compute_indicators(
         sharpe[label] = sr
 
         dprint(f"[{label}] 起止: {period_df.index[0].date()} -> {period_df.index[-1].date()}  首末: {start_price:.6f}->{end_price_p:.6f}  R={total_R:.6f}")
-        dprint(f"[{label}] N={N} k={k:.6f}  ann_ret={ann_ret:.6f}  ann_vol={ann_vol:.6f}  sharpe={sr:.6f}")
+        dprint(f"[{label}] N={N} ann_ret={ann_ret:.6f}  ann_vol={ann_vol:.6f}  sharpe={sr:.6f}")
 
     # 统一口径 MoM（短期窗口）
     short_df = period_dfs.get("短期")

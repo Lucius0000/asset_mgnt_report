@@ -52,7 +52,8 @@ $env:FRED_API_KEY="your_fred_api_key"
 
 - 需要先把各资产大类的 `月收益率年化 (%)`、`年收益率 (%)`、`月波动率年化（%）`、`总市值 ($)` 按 `整体.xlsx` 模板整理到 `data/seeds/整体.xlsx`
 - 还需要把 `output/fx_metrics.xlsx` 中的汇率表复制到 `整体.xlsx` 的 `Sheet2`
-- 然后再执行 `整体.py`
+- 然后再执行 `scripts/overall.py`
+- `scripts/房地产-半自动化表格.xlsx` 是房地产板块的人工整理辅助表，不参与自动脚本直接读取，但属于当前周报工作流的配套输入模板，使用时不要删除或归档到不可见位置
 
 整体表格整理示例：
 ![整体表格整理示例](docs/assets/整体_处理前.png)

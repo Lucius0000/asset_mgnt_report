@@ -24,7 +24,7 @@ class AppConfig:
     assets_dir: Path
     archive_dir: Path
     debug: bool = False
-    use_proxy: bool = False
+    use_proxy: bool = True
     http_proxy: str = "http://127.0.0.1:7890"
     https_proxy: str = "http://127.0.0.1:7890"
     fred_api_key: str | None = None
@@ -49,7 +49,7 @@ def build_app_config(project_root: str | Path | None = None, overrides: dict[str
         assets_dir=root / "docs" / "assets",
         archive_dir=root / "archive",
         debug=_env_bool("AMR_DEBUG", False),
-        use_proxy=_env_bool("AMR_USE_PROXY", False),
+        use_proxy=_env_bool("AMR_USE_PROXY", True),
         http_proxy=os.getenv("AMR_HTTP_PROXY", "http://127.0.0.1:7890"),
         https_proxy=os.getenv("AMR_HTTPS_PROXY", "http://127.0.0.1:7890"),
         fred_api_key=os.getenv("FRED_API_KEY"),

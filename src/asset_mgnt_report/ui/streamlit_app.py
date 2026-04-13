@@ -1,80 +1,568 @@
 from __future__ import annotations
 
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from copy import deepcopy
+from datetime import date, timedelta
+import io
+import os
 from pathlib import Path
-import subprocess
-import sys
+import time
+import traceback
 
 import streamlit as st
 
+from scripts import gainer as gainer_entry
+from scripts import main as main_entry
+from scripts import overall as overall_entry
+from scripts.validation import validate_outputs
 from src.asset_mgnt_report.config.defaults import build_app_config
 
 
-config = build_app_config()
-
-st.set_page_config(page_title="Asset Management Report", page_icon="📊", layout="wide")
-st.title("资产管理报表控制台")
-st.caption("统一参数配置、执行报表、触发验证。")
-
-with st.sidebar:
-    st.header("运行参数")
-    debug = st.checkbox("启用 debug", value=config.debug)
-    use_proxy = st.checkbox("启用代理", value=config.use_proxy)
-    selected = st.multiselect(
-        "主报表模块",
-        ["cpi", "gdp", "interest_rate", "carry_trade", "stock_index", "currency", "precious_metals", "bonds", "crypto"],
-        default=["cpi", "gdp", "interest_rate", "carry_trade", "stock_index", "currency", "precious_metals", "bonds", "crypto"],
-    )
-
-def _run_script(module_name: str) -> tuple[int, str]:
-    env = dict(**subprocess.os.environ)
-    env["AMR_DEBUG"] = "true" if debug else "false"
-    env["AMR_USE_PROXY"] = "true" if use_proxy else "false"
-    process = subprocess.run(
-        [sys.executable, "-m", module_name],
-        cwd=str(config.project_root),
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-    return process.returncode, (process.stdout + "\n" + process.stderr).strip()
+MODULE_OPTIONS: list[tuple[str, str]] = [
+    ("cpi", "CPI"),
+    ("gdp", "GDP"),
+    ("interest_rate", "利率"),
+    ("carry_trade", "利差"),
+    ("stock_index", "股票权益"),
+    ("currency", "汇率"),
+    ("precious_metals", "商品与贵金属"),
+    ("bonds", "债券固收"),
+    ("crypto", "数字货币"),
+]
+MODULE_LABELS = {key: label for key, label in MODULE_OPTIONS}
+HOME_CARDS = [
+    ("main", "主报表工作台", "按模块执行周报主链路，适合日常更新。"),
+    ("gainer", "Gainer 工作台", "输入日期与金价，稳定生成跨资产 Gainer 汇总。"),
+    ("overall", "整体表工作台", "处理整体.xlsx 并输出整体_processed.xlsx。"),
+    ("validation", "校验工作台", "对 main / codex 输出做回归对比，更新对比报告。"),
+]
+PAGE_LABELS = {
+    "home": "主页",
+    "main": "主报表",
+    "gainer": "Gainer",
+    "overall": "整体表",
+    "validation": "全量校验",
+}
 
 
-col1, col2, col3, col4 = st.columns(4)
-if col1.button("运行主报表", use_container_width=True):
-    logs: list[str] = []
-    for module_name in selected:
-        script_map = {
-            "cpi": "scripts.pipelines.cpi_report",
-            "gdp": "scripts.pipelines.gdp_report",
-            "interest_rate": "scripts.pipelines.interest_rate_report",
-            "carry_trade": "scripts.pipelines.carry_trade_report",
-            "stock_index": "scripts.pipelines.stock_index_report",
-            "currency": "scripts.pipelines.fx_report",
-            "precious_metals": "scripts.pipelines.precious_metals_report",
-            "bonds": "scripts.pipelines.bond_report",
-            "crypto": "scripts.pipelines.crypto_report",
+def _inject_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:wght@500;600&display=swap');
+
+        :root {
+            --amr-bg: #f6f1e8;
+            --amr-paper: #fbf8f3;
+            --amr-ink: #14213d;
+            --amr-muted: #5f6b7a;
+            --amr-line: rgba(20, 33, 61, 0.14);
+            --amr-accent: #b7791f;
+            --amr-accent-strong: #8b5e15;
+            --amr-accent-soft: rgba(183, 121, 31, 0.12);
+            --amr-success: #176b4d;
         }
-        code, output = _run_script(script_map[module_name])
-        logs.append(f"## {module_name} ({code})\n\n```text\n{output}\n```")
-    st.markdown("\n\n".join(logs))
 
-if col2.button("运行 Gainer", use_container_width=True):
-    code, output = _run_script("scripts.gainer")
-    st.code(output, language="text")
-    st.write(f"exit code: {code}")
+        .stApp {
+            background:
+                radial-gradient(circle at top left, rgba(183, 121, 31, 0.18), transparent 30%),
+                linear-gradient(180deg, #f2eadf 0%, var(--amr-bg) 40%, #f7f4ef 100%);
+        }
 
-if col3.button("运行整体表", use_container_width=True):
-    code, output = _run_script("scripts.overall")
-    st.code(output, language="text")
-    st.write(f"exit code: {code}")
+        html, body, [class*="css"] {
+            font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+            color: var(--amr-ink);
+        }
 
-if col4.button("运行全量校验", use_container_width=True):
-    code, output = _run_script("scripts.validation.validate_outputs")
-    st.code(output, language="text")
-    st.write(f"exit code: {code}")
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, rgba(20,33,61,0.96), rgba(20,33,61,0.88));
+        }
 
-st.subheader("目录")
-st.write(f"项目根目录: `{config.project_root}`")
-st.write(f"种子数据目录: `{config.seed_data_dir}`")
-st.write(f"本地数据目录: `{config.local_data_dir}`")
-st.write(f"输出目录: `{config.output_dir}`")
+        [data-testid="stSidebar"] * {
+            color: #f6f3ee;
+        }
+
+        .amr-hero {
+            padding: 2.4rem 2.2rem 2rem;
+            border: 1px solid var(--amr-line);
+            background:
+                linear-gradient(135deg, rgba(20, 33, 61, 0.96), rgba(20, 33, 61, 0.82)),
+                linear-gradient(180deg, rgba(183, 121, 31, 0.18), transparent);
+            color: #f8f4ec;
+            border-radius: 28px;
+            box-shadow: 0 24px 80px rgba(20, 33, 61, 0.16);
+            margin-bottom: 1.25rem;
+        }
+
+        .amr-eyebrow {
+            letter-spacing: 0.24em;
+            text-transform: uppercase;
+            font-size: 0.74rem;
+            opacity: 0.72;
+            margin-bottom: 0.8rem;
+        }
+
+        .amr-hero h1 {
+            font-family: "IBM Plex Serif", Georgia, serif;
+            font-size: clamp(2.2rem, 5vw, 4rem);
+            line-height: 0.96;
+            margin: 0 0 0.75rem 0;
+        }
+
+        .amr-hero p {
+            max-width: 42rem;
+            font-size: 1rem;
+            line-height: 1.65;
+            margin: 0;
+            color: rgba(248, 244, 236, 0.82);
+        }
+
+        .amr-panel {
+            padding: 1.25rem 1.35rem;
+            border: 1px solid var(--amr-line);
+            border-radius: 24px;
+            background: rgba(251, 248, 243, 0.86);
+            box-shadow: 0 16px 40px rgba(20, 33, 61, 0.08);
+            backdrop-filter: blur(6px);
+            min-height: 168px;
+        }
+
+        .amr-panel h3 {
+            font-family: "IBM Plex Serif", Georgia, serif;
+            margin: 0 0 0.55rem 0;
+            font-size: 1.35rem;
+        }
+
+        .amr-panel p {
+            margin: 0;
+            color: var(--amr-muted);
+            line-height: 1.65;
+        }
+
+        .amr-section-label {
+            margin: 1.5rem 0 0.7rem 0;
+            font-size: 0.86rem;
+            text-transform: uppercase;
+            letter-spacing: 0.18em;
+            color: var(--amr-accent-strong);
+        }
+
+        .amr-meta {
+            border-top: 1px solid var(--amr-line);
+            margin-top: 1.35rem;
+            padding-top: 1rem;
+            color: var(--amr-muted);
+            font-size: 0.95rem;
+        }
+
+        .amr-result {
+            padding: 1.25rem 1.35rem;
+            border-radius: 24px;
+            border: 1px solid var(--amr-line);
+            background: rgba(255,255,255,0.72);
+            margin-top: 1rem;
+            animation: amrFadeUp 260ms ease;
+        }
+
+        .amr-result strong {
+            color: var(--amr-ink);
+        }
+
+        .amr-workspace-head {
+            display: flex;
+            align-items: end;
+            justify-content: space-between;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .amr-workspace-copy h2 {
+            font-family: "IBM Plex Serif", Georgia, serif;
+            margin: 0;
+            font-size: 2rem;
+        }
+
+        .amr-workspace-copy p {
+            margin: 0.45rem 0 0 0;
+            color: var(--amr-muted);
+            max-width: 42rem;
+            line-height: 1.7;
+        }
+
+        .amr-inline-note {
+            margin-top: 0.9rem;
+            padding: 0.85rem 1rem;
+            border-radius: 16px;
+            background: rgba(183, 121, 31, 0.08);
+            color: var(--amr-accent-strong);
+            border: 1px solid rgba(183, 121, 31, 0.12);
+        }
+
+        @keyframes amrFadeUp {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        div[data-testid="stButton"] > button {
+            border-radius: 999px;
+            border: 1px solid rgba(20, 33, 61, 0.12);
+            background: linear-gradient(180deg, #fcfaf6, #f1e8db);
+            color: var(--amr-ink);
+            font-weight: 600;
+            min-height: 2.9rem;
+            box-shadow: none;
+            transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+        }
+
+        div[data-testid="stButton"] > button:hover {
+            border-color: rgba(183, 121, 31, 0.4);
+            box-shadow: 0 10px 22px rgba(183, 121, 31, 0.16);
+            transform: translateY(-1px);
+        }
+
+        div[data-testid="stButton"] > button[kind="primary"] {
+            background: linear-gradient(180deg, var(--amr-accent), var(--amr-accent-strong));
+            color: #fff9ef;
+            border: 0;
+        }
+
+        [data-testid="stCodeBlock"] {
+            border-radius: 18px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _ensure_state(config) -> None:
+    defaults = {
+        "page": "home",
+        "nav_page": "home",
+        "debug": config.debug,
+        "use_proxy": config.use_proxy,
+        "main_modules": [key for key, _ in MODULE_OPTIONS],
+        "gainer_current_date": date.today(),
+        "gainer_previous_date": date.today() - timedelta(days=13),
+        "gainer_current_gold_price": "",
+        "gainer_previous_gold_price": "",
+        "overall_input_path": str(Path("data") / "seeds" / "整体.xlsx"),
+        "overall_output_path": str(Path("output") / "整体_processed.xlsx"),
+        "overall_log_path": str(Path("output") / "raw_data" / "整体_calculation_steps.txt"),
+        "result": None,
+    }
+    for key, value in defaults.items():
+        st.session_state.setdefault(key, value)
+
+
+@contextmanager
+def _temporary_env(debug: bool, use_proxy: bool):
+    updates = {
+        "AMR_DEBUG": "true" if debug else "false",
+        "AMR_USE_PROXY": "true" if use_proxy else "false",
+    }
+    snapshot = {key: os.environ.get(key) for key in updates}
+    os.environ.update(updates)
+    try:
+        yield
+    finally:
+        for key, old_value in snapshot.items():
+            if old_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old_value
+
+
+@contextmanager
+def _patched_config(module, **updates):
+    original = deepcopy(module.CONFIG)
+    module.CONFIG.update({key: value for key, value in updates.items() if value is not None})
+    try:
+        yield
+    finally:
+        module.CONFIG.clear()
+        module.CONFIG.update(original)
+
+
+def _set_page(page: str) -> None:
+    st.session_state["page"] = page
+    st.session_state["nav_page"] = page
+
+
+def _sync_page_from_nav() -> None:
+    st.session_state["page"] = st.session_state["nav_page"]
+
+
+def _capture_run(label: str, callback):
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+    start = time.perf_counter()
+    try:
+        with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+            callback()
+    except Exception:
+        return {
+            "label": label,
+            "status": "error",
+            "duration": time.perf_counter() - start,
+            "output": (stdout_buffer.getvalue() + "\n" + stderr_buffer.getvalue()).strip(),
+            "traceback": traceback.format_exc(),
+        }
+    return {
+        "label": label,
+        "status": "success",
+        "duration": time.perf_counter() - start,
+        "output": (stdout_buffer.getvalue() + "\n" + stderr_buffer.getvalue()).strip(),
+        "traceback": "",
+    }
+
+
+def _run_main_action() -> None:
+    with _temporary_env(st.session_state["debug"], st.session_state["use_proxy"]):
+        result = _capture_run(
+            "主报表",
+            lambda: main_entry.main(
+                debug=bool(st.session_state["debug"]),
+                modules=list(st.session_state["main_modules"]),
+            ),
+        )
+    st.session_state["result"] = result
+
+
+def _run_gainer_action() -> None:
+    if not st.session_state["gainer_current_gold_price"] or not st.session_state["gainer_previous_gold_price"]:
+        st.session_state["result"] = {
+            "label": "Gainer",
+            "status": "error",
+            "duration": 0.0,
+            "output": "运行 Gainer 之前，需要在页面中填写本周末与两周前的黄金价格。",
+            "traceback": "",
+        }
+        return
+
+    with _patched_config(
+        gainer_entry,
+        current_date=st.session_state["gainer_current_date"].strftime("%Y-%m-%d"),
+        previous_date=st.session_state["gainer_previous_date"].strftime("%Y-%m-%d"),
+        current_gold_price=float(st.session_state["gainer_current_gold_price"]),
+        previous_gold_price=float(st.session_state["gainer_previous_gold_price"]),
+    ):
+        with _temporary_env(st.session_state["debug"], st.session_state["use_proxy"]):
+            st.session_state["result"] = _capture_run("Gainer", gainer_entry.main)
+
+
+def _run_overall_action() -> None:
+    with _patched_config(
+        overall_entry,
+        input_path=Path(st.session_state["overall_input_path"]),
+        output_path=Path(st.session_state["overall_output_path"]),
+        log_path=Path(st.session_state["overall_log_path"]),
+    ):
+        with _temporary_env(st.session_state["debug"], st.session_state["use_proxy"]):
+            st.session_state["result"] = _capture_run("整体表", overall_entry.main)
+
+
+def _run_validation_action() -> None:
+    with _temporary_env(st.session_state["debug"], st.session_state["use_proxy"]):
+        st.session_state["result"] = _capture_run("全量校验", validate_outputs.main)
+
+
+def _render_result_panel() -> None:
+    result = st.session_state.get("result")
+    if not result:
+        return
+
+    status_text = "成功" if result["status"] == "success" else "失败"
+    status_color = "#176b4d" if result["status"] == "success" else "#8f2d2d"
+    st.markdown(
+        f"""
+        <div class="amr-result">
+            <strong style="color:{status_color};">{result["label"]} · {status_text}</strong><br />
+            用时 {result["duration"]:.2f} 秒
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if result["output"]:
+        st.code(result["output"], language="text")
+    if result["traceback"]:
+        st.error(result["traceback"])
+
+
+def _render_sidebar(config) -> None:
+    with st.sidebar:
+        st.markdown("### 控制台设置")
+        st.radio(
+            "工作区",
+            options=list(PAGE_LABELS),
+            key="nav_page",
+            format_func=lambda key: PAGE_LABELS[key],
+            on_change=_sync_page_from_nav,
+        )
+        st.checkbox("启用 debug", key="debug")
+        st.checkbox("启用代理", key="use_proxy")
+        st.button("返回主页", use_container_width=True, on_click=_set_page, args=("home",))
+        if st.button("清空运行结果", use_container_width=True):
+            st.session_state["result"] = None
+
+        st.markdown("---")
+        st.markdown("#### 当前目录")
+        st.caption(f"项目根目录: `{config.project_root}`")
+        st.caption(f"种子数据目录: `{config.seed_data_dir}`")
+        st.caption(f"本地数据目录: `{config.local_data_dir}`")
+        st.caption(f"输出目录: `{config.output_dir}`")
+
+
+def _render_workspace_header(title: str, description: str) -> None:
+    left, right = st.columns([5, 1.2], vertical_alignment="bottom")
+    with left:
+        st.markdown(
+            f"""
+            <div class="amr-workspace-copy">
+                <h2>{title}</h2>
+                <p>{description}</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with right:
+        st.button("返回主页", key=f"home-{title}", use_container_width=True, on_click=_set_page, args=("home",))
+
+
+def _render_home() -> None:
+    st.markdown(
+        """
+        <section class="amr-hero">
+            <div class="amr-eyebrow">Asset Management Report</div>
+            <h1>资产管理报表控制台</h1>
+            <p>
+                以统一参数和统一口径驱动主报表、Gainer、整体表与回归校验。
+                页面默认以代理模式运行，避免数据抓取链路在日常使用中反复手动切换。
+            </p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="amr-section-label">工作入口</div>', unsafe_allow_html=True)
+    columns = st.columns(2, gap="large")
+    for index, (page_key, title, desc) in enumerate(HOME_CARDS):
+        with columns[index % 2]:
+            st.markdown(f'<div class="amr-panel"><h3>{title}</h3><p>{desc}</p></div>', unsafe_allow_html=True)
+            st.button(
+                f"进入 {title}",
+                key=f"nav-{page_key}",
+                use_container_width=True,
+                type="primary",
+                on_click=_set_page,
+                args=(page_key,),
+            )
+
+    st.markdown('<div class="amr-section-label">当前默认行为</div>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="amr-panel">
+            <h3>交互逻辑</h3>
+            <p>
+                主页负责导航；各工作台负责参数编辑和执行；所有执行结果固定显示在结果区，不再因按钮触发而出现整页空白。
+            </p>
+            <div class="amr-meta">
+                默认启用代理。运行结果、报错和日志都会停留在页面中，便于复核和回退。
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="amr-inline-note">如果任务执行失败，错误日志会保留在当前页，不会再跳成空白页面。</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_main_page() -> None:
+    _render_workspace_header("主报表工作台", "选择需要执行的资产模块，运行结果会固定停留在当前页底部。")
+    with st.form("main-form", border=False):
+        st.multiselect(
+            "主报表模块",
+            options=[key for key, _ in MODULE_OPTIONS],
+            default=st.session_state["main_modules"],
+            key="main_modules",
+            format_func=lambda key: f"{MODULE_LABELS[key]} · {key}",
+        )
+        submitted = st.form_submit_button("执行主报表", type="primary", use_container_width=True)
+    if submitted:
+        _run_main_action()
+    _render_result_panel()
+
+
+def _render_gainer_page() -> None:
+    _render_workspace_header("Gainer 工作台", "在页面中直接定义日期和黄金价格，避免后台脚本再回退到命令行交互。")
+    with st.form("gainer-form", border=False):
+        col1, col2 = st.columns(2)
+        col1.date_input("本周末日期", key="gainer_current_date")
+        col2.date_input("两周前日期", key="gainer_previous_date")
+        col3, col4 = st.columns(2)
+        col3.text_input("本周末黄金价格（USD/oz）", key="gainer_current_gold_price", placeholder="例如 2378.42")
+        col4.text_input("两周前黄金价格（USD/oz）", key="gainer_previous_gold_price", placeholder="例如 2314.15")
+        submitted = st.form_submit_button("执行 Gainer", type="primary", use_container_width=True)
+    if submitted:
+        _run_gainer_action()
+    _render_result_panel()
+
+
+def _render_overall_page() -> None:
+    _render_workspace_header("整体表工作台", "处理整理好的整体.xlsx 输入，并稳定输出处理后的总表与日志。")
+    with st.form("overall-form", border=False):
+        st.text_input("输入文件", key="overall_input_path")
+        st.text_input("输出文件", key="overall_output_path")
+        st.text_input("日志文件", key="overall_log_path")
+        submitted = st.form_submit_button("执行整体表", type="primary", use_container_width=True)
+    if submitted:
+        _run_overall_action()
+    _render_result_panel()
+
+
+def _render_validation_page() -> None:
+    _render_workspace_header("校验工作台", "对 main / codex 已落盘输出执行回归比较，并刷新对比报告。")
+    st.markdown(
+        """
+        <div class="amr-panel">
+            <h3>校验范围</h3>
+            <p>
+                当前覆盖主报表、Gainer、整体表和二级市场核心输出。校验报告会更新到
+                <code>docs/重构前后对比报告.md</code>。
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.button("执行全量校验", type="primary", use_container_width=True):
+        _run_validation_action()
+    _render_result_panel()
+
+
+config = build_app_config()
+st.set_page_config(page_title="Asset Management Report", page_icon="📊", layout="wide")
+_inject_styles()
+_ensure_state(config)
+_render_sidebar(config)
+
+page = st.session_state["page"]
+if page == "home":
+    _render_home()
+elif page == "main":
+    _render_main_page()
+elif page == "gainer":
+    _render_gainer_page()
+elif page == "overall":
+    _render_overall_page()
+elif page == "validation":
+    _render_validation_page()
+else:
+    st.session_state["page"] = "home"

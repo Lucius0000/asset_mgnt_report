@@ -134,9 +134,12 @@ streamlit run scripts/web_ui.py
   - `http://localhost:8501`
 
 - Web UI 可用于：
+  - 从主页进入主报表、Gainer、整体表、校验四个工作台
+  - 默认启用代理模式，也可在侧边栏关闭
   - 选择主报表模块
-  - 启用或关闭 debug / proxy
-  - 运行主报表、Gainer、整体表
+  - 在页面内填写 Gainer 所需日期与黄金价格
+  - 在页面内指定整体表输入、输出、日志路径
+  - 通过页面顶部或侧边栏返回主页，并在当前页保留运行结果
   - 触发 main / codex 输出校验
 
 #### 4. Docker 运行

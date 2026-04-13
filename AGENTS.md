@@ -20,6 +20,13 @@
 - 浏览器实测截图默认输出到当前仓库的 `output/playwright/`
 - 如果页面修复依赖浏览器交互验证，最终说明里要写明实际执行过的步骤和产出的截图文件。
 
+## Spyder 与换行符
+- `scripts/` 下的 Python 脚本统一使用 LF，禁止混用 `CRLF` 与 `LF`，否则 Spyder 会提示“当前脚本文件使用了多个换行符”。
+- 只要修改过 `scripts/` 下的 `.py` 文件，在提交前必须运行 `python scripts/tools/normalize_line_endings.py --quiet` 检查。
+- 如果检查发现混用换行符，立刻运行 `python scripts/tools/normalize_line_endings.py --write` 统一修复，再重新检查一次。
+- 将本仓库同步到 `wealth-hunter` 之后，必须在目标仓库的 `asset_mgnt_report` 目录再执行一次同样的检查与修复，因为复制工具会原样保留文件字节内容。
+- 不要依赖编辑器自动转换；以仓库内的 `.gitattributes` 和 `scripts/tools/normalize_line_endings.py` 结果为准。
+
 ## 环境变量
 - `FRED_API_KEY`
 - `AMR_DEBUG`

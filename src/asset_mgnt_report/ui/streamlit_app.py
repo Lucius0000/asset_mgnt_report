@@ -69,6 +69,12 @@ def _inject_styles() -> None:
                 linear-gradient(180deg, #f2eadf 0%, var(--amr-bg) 40%, #f7f4ef 100%);
         }
 
+        [data-testid="stAppViewContainer"] > .main .block-container {
+            padding-top: 1.35rem;
+            padding-bottom: 2rem;
+            max-width: 1380px;
+        }
+
         html, body, [class*="css"] {
             font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
             color: var(--amr-ink);
@@ -78,12 +84,22 @@ def _inject_styles() -> None:
             background: linear-gradient(180deg, rgba(20,33,61,0.96), rgba(20,33,61,0.88));
         }
 
-        [data-testid="stSidebar"] * {
-            color: #f6f3ee;
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] p,
+        [data-testid="stSidebar"] span,
+        [data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] * {
+            color: #f2eee7 !important;
+        }
+
+        [data-testid="stSidebar"] code {
+            color: #f9f5ee !important;
+            background: rgba(255, 255, 255, 0.12);
+            border-radius: 8px;
+            padding: 0.1rem 0.35rem;
         }
 
         .amr-hero {
-            padding: 2.4rem 2.2rem 2rem;
+            padding: 1.55rem 1.7rem 1.45rem;
             border: 1px solid var(--amr-line);
             background:
                 linear-gradient(135deg, rgba(20, 33, 61, 0.96), rgba(20, 33, 61, 0.82)),
@@ -91,7 +107,7 @@ def _inject_styles() -> None:
             color: #f8f4ec;
             border-radius: 28px;
             box-shadow: 0 24px 80px rgba(20, 33, 61, 0.16);
-            margin-bottom: 1.25rem;
+            margin-bottom: 0.95rem;
         }
 
         .amr-eyebrow {
@@ -104,44 +120,45 @@ def _inject_styles() -> None:
 
         .amr-hero h1 {
             font-family: "IBM Plex Serif", Georgia, serif;
-            font-size: clamp(2.2rem, 5vw, 4rem);
-            line-height: 0.96;
-            margin: 0 0 0.75rem 0;
+            font-size: clamp(1.9rem, 4vw, 2.95rem);
+            line-height: 1.02;
+            margin: 0 0 0.55rem 0;
         }
 
         .amr-hero p {
-            max-width: 42rem;
-            font-size: 1rem;
-            line-height: 1.65;
+            max-width: 58rem;
+            font-size: 0.95rem;
+            line-height: 1.58;
             margin: 0;
             color: rgba(248, 244, 236, 0.82);
         }
 
         .amr-panel {
-            padding: 1.25rem 1.35rem;
+            padding: 1.05rem 1.15rem;
             border: 1px solid var(--amr-line);
-            border-radius: 24px;
+            border-radius: 22px;
             background: rgba(251, 248, 243, 0.86);
             box-shadow: 0 16px 40px rgba(20, 33, 61, 0.08);
             backdrop-filter: blur(6px);
-            min-height: 168px;
+            min-height: 118px;
         }
 
         .amr-panel h3 {
             font-family: "IBM Plex Serif", Georgia, serif;
-            margin: 0 0 0.55rem 0;
-            font-size: 1.35rem;
+            margin: 0 0 0.45rem 0;
+            font-size: 1.08rem;
         }
 
         .amr-panel p {
             margin: 0;
             color: var(--amr-muted);
-            line-height: 1.65;
+            line-height: 1.55;
+            font-size: 0.94rem;
         }
 
         .amr-section-label {
-            margin: 1.5rem 0 0.7rem 0;
-            font-size: 0.86rem;
+            margin: 1rem 0 0.55rem 0;
+            font-size: 0.8rem;
             text-transform: uppercase;
             letter-spacing: 0.18em;
             color: var(--amr-accent-strong);
@@ -156,11 +173,11 @@ def _inject_styles() -> None:
         }
 
         .amr-result {
-            padding: 1.25rem 1.35rem;
-            border-radius: 24px;
+            padding: 1.05rem 1.15rem;
+            border-radius: 20px;
             border: 1px solid var(--amr-line);
             background: rgba(255,255,255,0.72);
-            margin-top: 1rem;
+            margin-top: 0.85rem;
             animation: amrFadeUp 260ms ease;
         }
 
@@ -179,7 +196,7 @@ def _inject_styles() -> None:
         .amr-workspace-copy h2 {
             font-family: "IBM Plex Serif", Georgia, serif;
             margin: 0;
-            font-size: 2rem;
+            font-size: 1.55rem;
         }
 
         .amr-workspace-copy p {
@@ -215,7 +232,7 @@ def _inject_styles() -> None:
             background: linear-gradient(180deg, #fcfaf6, #f1e8db);
             color: var(--amr-ink);
             font-weight: 600;
-            min-height: 2.9rem;
+            min-height: 2.65rem;
             box-shadow: none;
             transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
         }
@@ -232,8 +249,31 @@ def _inject_styles() -> None:
             border: 0;
         }
 
+        [data-testid="stSidebar"] div[data-testid="stButton"] > button {
+            background: rgba(255, 248, 236, 0.94);
+            color: var(--amr-ink) !important;
+        }
+
+        [data-testid="stSidebar"] .stCaption {
+            color: rgba(242, 238, 231, 0.82) !important;
+        }
+
+        [data-testid="stSidebar"] [data-baseweb="radio"] > div,
+        [data-testid="stSidebar"] [data-baseweb="checkbox"] > div {
+            color: #f2eee7 !important;
+        }
+
+        [data-testid="stSidebar"] [data-baseweb="radio"] label,
+        [data-testid="stSidebar"] [data-baseweb="checkbox"] label {
+            color: #f2eee7 !important;
+        }
+
         [data-testid="stCodeBlock"] {
             border-radius: 18px;
+        }
+
+        button[data-baseweb="tab"] {
+            border-radius: 999px;
         }
         </style>
         """,
@@ -243,8 +283,6 @@ def _inject_styles() -> None:
 
 def _ensure_state(config) -> None:
     defaults = {
-        "page": "home",
-        "nav_page": "home",
         "debug": config.debug,
         "use_proxy": config.use_proxy,
         "main_modules": [key for key, _ in MODULE_OPTIONS],
@@ -288,15 +326,6 @@ def _patched_config(module, **updates):
     finally:
         module.CONFIG.clear()
         module.CONFIG.update(original)
-
-
-def _set_page(page: str) -> None:
-    st.session_state["page"] = page
-    st.session_state["nav_page"] = page
-
-
-def _sync_page_from_nav() -> None:
-    st.session_state["page"] = st.session_state["nav_page"]
 
 
 def _capture_run(label: str, callback):
@@ -398,16 +427,9 @@ def _render_result_panel() -> None:
 def _render_sidebar(config) -> None:
     with st.sidebar:
         st.markdown("### 控制台设置")
-        st.radio(
-            "工作区",
-            options=list(PAGE_LABELS),
-            key="nav_page",
-            format_func=lambda key: PAGE_LABELS[key],
-            on_change=_sync_page_from_nav,
-        )
+        st.caption("主导航已移动到页面顶部标签栏。")
         st.checkbox("启用 debug", key="debug")
         st.checkbox("启用代理", key="use_proxy")
-        st.button("返回主页", use_container_width=True, on_click=_set_page, args=("home",))
         if st.button("清空运行结果", use_container_width=True):
             st.session_state["result"] = None
 
@@ -420,19 +442,15 @@ def _render_sidebar(config) -> None:
 
 
 def _render_workspace_header(title: str, description: str) -> None:
-    left, right = st.columns([5, 1.2], vertical_alignment="bottom")
-    with left:
-        st.markdown(
-            f"""
-            <div class="amr-workspace-copy">
-                <h2>{title}</h2>
-                <p>{description}</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with right:
-        st.button("返回主页", key=f"home-{title}", use_container_width=True, on_click=_set_page, args=("home",))
+    st.markdown(
+        f"""
+        <div class="amr-workspace-copy">
+            <h2>{title}</h2>
+            <p>{description}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _render_home() -> None:
@@ -455,14 +473,6 @@ def _render_home() -> None:
     for index, (page_key, title, desc) in enumerate(HOME_CARDS):
         with columns[index % 2]:
             st.markdown(f'<div class="amr-panel"><h3>{title}</h3><p>{desc}</p></div>', unsafe_allow_html=True)
-            st.button(
-                f"进入 {title}",
-                key=f"nav-{page_key}",
-                use_container_width=True,
-                type="primary",
-                on_click=_set_page,
-                args=(page_key,),
-            )
 
     st.markdown('<div class="amr-section-label">当前默认行为</div>', unsafe_allow_html=True)
     st.markdown(
@@ -487,43 +497,37 @@ def _render_home() -> None:
 
 def _render_main_page() -> None:
     _render_workspace_header("主报表工作台", "选择需要执行的资产模块，运行结果会固定停留在当前页底部。")
-    with st.form("main-form", border=False):
-        st.multiselect(
-            "主报表模块",
-            options=[key for key, _ in MODULE_OPTIONS],
-            default=st.session_state["main_modules"],
-            key="main_modules",
-            format_func=lambda key: f"{MODULE_LABELS[key]} · {key}",
-        )
-        submitted = st.form_submit_button("执行主报表", type="primary", use_container_width=True)
-    if submitted:
+    st.multiselect(
+        "主报表模块",
+        options=[key for key, _ in MODULE_OPTIONS],
+        default=st.session_state["main_modules"],
+        key="main_modules",
+        format_func=lambda key: f"{MODULE_LABELS[key]} · {key}",
+    )
+    if st.button("执行主报表", key="run-main", type="primary", use_container_width=True):
         _run_main_action()
     _render_result_panel()
 
 
 def _render_gainer_page() -> None:
     _render_workspace_header("Gainer 工作台", "在页面中直接定义日期和黄金价格，避免后台脚本再回退到命令行交互。")
-    with st.form("gainer-form", border=False):
-        col1, col2 = st.columns(2)
-        col1.date_input("本周末日期", key="gainer_current_date")
-        col2.date_input("两周前日期", key="gainer_previous_date")
-        col3, col4 = st.columns(2)
-        col3.text_input("本周末黄金价格（USD/oz）", key="gainer_current_gold_price", placeholder="例如 2378.42")
-        col4.text_input("两周前黄金价格（USD/oz）", key="gainer_previous_gold_price", placeholder="例如 2314.15")
-        submitted = st.form_submit_button("执行 Gainer", type="primary", use_container_width=True)
-    if submitted:
+    col1, col2 = st.columns(2)
+    col1.date_input("本周末日期", key="gainer_current_date")
+    col2.date_input("两周前日期", key="gainer_previous_date")
+    col3, col4 = st.columns(2)
+    col3.text_input("本周末黄金价格（USD/oz）", key="gainer_current_gold_price", placeholder="例如 2378.42")
+    col4.text_input("两周前黄金价格（USD/oz）", key="gainer_previous_gold_price", placeholder="例如 2314.15")
+    if st.button("执行 Gainer", key="run-gainer", type="primary", use_container_width=True):
         _run_gainer_action()
     _render_result_panel()
 
 
 def _render_overall_page() -> None:
     _render_workspace_header("整体表工作台", "处理整理好的整体.xlsx 输入，并稳定输出处理后的总表与日志。")
-    with st.form("overall-form", border=False):
-        st.text_input("输入文件", key="overall_input_path")
-        st.text_input("输出文件", key="overall_output_path")
-        st.text_input("日志文件", key="overall_log_path")
-        submitted = st.form_submit_button("执行整体表", type="primary", use_container_width=True)
-    if submitted:
+    st.text_input("输入文件", key="overall_input_path")
+    st.text_input("输出文件", key="overall_output_path")
+    st.text_input("日志文件", key="overall_log_path")
+    if st.button("执行整体表", key="run-overall", type="primary", use_container_width=True):
         _run_overall_action()
     _render_result_panel()
 
@@ -553,16 +557,21 @@ _inject_styles()
 _ensure_state(config)
 _render_sidebar(config)
 
-page = st.session_state["page"]
-if page == "home":
+home_tab, main_tab, gainer_tab, overall_tab, validation_tab = st.tabs(
+    [PAGE_LABELS["home"], PAGE_LABELS["main"], PAGE_LABELS["gainer"], PAGE_LABELS["overall"], PAGE_LABELS["validation"]]
+)
+
+with home_tab:
     _render_home()
-elif page == "main":
+
+with main_tab:
     _render_main_page()
-elif page == "gainer":
+
+with gainer_tab:
     _render_gainer_page()
-elif page == "overall":
+
+with overall_tab:
     _render_overall_page()
-elif page == "validation":
+
+with validation_tab:
     _render_validation_page()
-else:
-    st.session_state["page"] = "home"

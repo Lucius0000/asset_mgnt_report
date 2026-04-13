@@ -22,7 +22,9 @@ def test_web_ui_home_renders_with_proxy_enabled() -> None:
     assert len(at.checkbox) >= 2
     assert at.checkbox[1].label == "启用代理"
     assert at.checkbox[1].value is True
-    assert any(button.label == "进入 主报表工作台" for button in at.button)
+    rendered_markdown = "\n".join(markdown.value for markdown in at.markdown)
+    assert "主报表工作台" in rendered_markdown
+    assert "Gainer 工作台" in rendered_markdown
 
 
 def test_build_app_config_enables_proxy_by_default() -> None:

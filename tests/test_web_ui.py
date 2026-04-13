@@ -77,11 +77,57 @@ def test_start_background_job_marks_result_running() -> None:
     original_state = streamlit_app.st.session_state
     streamlit_app.st.session_state = fake_state
     try:
-        streamlit_app._start_background_job("测试任务", lambda: None)
+        streamlit_app._start_background_job("测试任务", lambda progress_callback, cancel_check: None)
         assert fake_state["active_job_id"]
         assert fake_state["result"]["status"] == "running"
         job = streamlit_app._get_job(fake_state["active_job_id"])
         assert job is not None
-        assert job["state"] in {"running", "finished"}
+        assert job["state"] in {"running", "success"}
     finally:
         streamlit_app.st.session_state = original_state
+
+
+def test_request_job_cancel_marks_job_cancelling() -> None:
+    streamlit_app._JOB_REGISTRY.clear()
+    job_id = "job-test"
+    streamlit_app._set_job(job_id, streamlit_app._create_job_payload("主报表"))
+    streamlit_app._update_job(job_id, state="running")
+
+    streamlit_app._request_job_cancel(job_id)
+
+    job = streamlit_app._get_job(job_id)
+    assert job is not None
+    assert job["state"] == "cancelling"
+    assert job["cancel_requested"] is True
+
+
+def test_apply_progress_event_updates_current_unit_and_subtask() -> None:
+    streamlit_app._JOB_REGISTRY.clear()
+    job_id = "job-progress"
+    streamlit_app._set_job(job_id, streamlit_app._create_job_payload("Gainer"))
+
+    streamlit_app._apply_progress_event(
+        job_id,
+        {
+            "event": "step_start",
+            "step_label": "步骤 1 / 股票市值",
+            "completed_units": [],
+            "pending_units": ["步骤 1 / 股票市值", "步骤 2 / 债券市值"],
+            "progress_ratio": 0.0,
+        },
+    )
+    streamlit_app._apply_progress_event(
+        job_id,
+        {
+            "event": "subtask_progress",
+            "subtask": "S&P 500",
+            "progress_label": "S&P 500 120/503",
+            "progress_ratio": 0.24,
+        },
+    )
+
+    job = streamlit_app._get_job(job_id)
+    assert job is not None
+    assert job["current_unit"] == "步骤 1 / 股票市值"
+    assert job["current_subtask"] == "S&P 500"
+    assert job["current_subtask_label"] == "S&P 500 120/503"

@@ -18,6 +18,7 @@ from scripts import main as main_entry
 from scripts import overall as overall_entry
 from scripts.validation import validate_outputs
 from src.asset_mgnt_report.config.defaults import build_app_config
+from src.asset_mgnt_report.services.progress import JobCancelledError
 
 
 MODULE_OPTIONS: list[tuple[str, str]] = [
@@ -346,6 +347,27 @@ def _restore_overall_paths(config) -> None:
         st.session_state[key] = _sanitize_text_path(st.session_state.get(key), default)
 
 
+def _create_job_payload(label: str) -> dict[str, object]:
+    return {
+        "label": label,
+        "state": "queued",
+        "started_at": time.time(),
+        "finished_at": None,
+        "cancel_requested": False,
+        "current_unit": None,
+        "current_subtask": None,
+        "current_subtask_ratio": None,
+        "current_subtask_label": "",
+        "total_units": 0,
+        "completed_units": [],
+        "pending_units": [],
+        "progress_ratio": 0.0,
+        "logs": [],
+        "result": None,
+        "traceback": "",
+    }
+
+
 def _set_job(job_id: str, payload: dict[str, object]) -> None:
     with _JOB_LOCK:
         _JOB_REGISTRY[job_id] = payload
@@ -359,19 +381,191 @@ def _get_job(job_id: str | None) -> dict[str, object] | None:
         return deepcopy(job) if job else None
 
 
+def _update_job(job_id: str, **updates: object) -> None:
+    with _JOB_LOCK:
+        job = _JOB_REGISTRY.get(job_id)
+        if not job:
+            return
+        job.update(updates)
+
+
+def _append_job_logs(job_id: str, raw_text: str) -> None:
+    cleaned = [line.rstrip() for line in raw_text.splitlines() if line.strip()]
+    if not cleaned:
+        return
+    with _JOB_LOCK:
+        job = _JOB_REGISTRY.get(job_id)
+        if not job:
+            return
+        logs = list(job.get("logs", []))
+        logs.extend(cleaned)
+        job["logs"] = logs[-120:]
+
+
+def _request_job_cancel(job_id: str | None) -> None:
+    if not job_id:
+        return
+    with _JOB_LOCK:
+        job = _JOB_REGISTRY.get(job_id)
+        if not job or job.get("state") in {"success", "error", "cancelled"}:
+            return
+        job["cancel_requested"] = True
+        job["state"] = "cancelling"
+        logs = list(job.get("logs", []))
+        logs.append("收到取消请求，正在等待当前步骤安全结束。")
+        job["logs"] = logs[-120:]
+
+
+def _cancel_active_job() -> None:
+    _request_job_cancel(st.session_state.get("active_job_id"))
+
+
+def _job_cancel_requested(job_id: str) -> bool:
+    with _JOB_LOCK:
+        job = _JOB_REGISTRY.get(job_id)
+        return bool(job and job.get("cancel_requested"))
+
+
+def _format_event_log(event: dict[str, object]) -> str | None:
+    event_type = event.get("event")
+    if event_type == "module_start":
+        return f"开始模块：{MODULE_LABELS.get(str(event.get('module_name')), event.get('module_name', ''))}"
+    if event_type == "module_complete":
+        return f"完成模块：{MODULE_LABELS.get(str(event.get('module_name')), event.get('module_name', ''))}"
+    if event_type == "module_error":
+        return f"模块失败：{MODULE_LABELS.get(str(event.get('module_name')), event.get('module_name', ''))} - {event.get('message', '')}"
+    if event_type == "step_start":
+        return f"开始 {event.get('step_label', '')}"
+    if event_type == "step_complete":
+        return f"完成 {event.get('step_label', '')}"
+    if event_type == "subtask_start":
+        return str(event.get("progress_label", "")).strip() or None
+    if event_type == "subtask_complete":
+        return str(event.get("progress_label", "")).strip() or None
+    return None
+
+
+def _apply_progress_event(job_id: str, event: dict[str, object]) -> None:
+    event_type = str(event.get("event", "")).strip()
+    human_log = _format_event_log(event)
+    if human_log:
+        _append_job_logs(job_id, human_log)
+
+    with _JOB_LOCK:
+        job = _JOB_REGISTRY.get(job_id)
+        if not job:
+            return
+
+        if event_type == "job_init":
+            job["total_units"] = int(event.get("total_units", 0) or 0)
+            job["pending_units"] = list(event.get("pending_units", []))
+            return
+
+        if event_type in {"module_start", "step_start"}:
+            job["current_unit"] = event.get("module_name") or event.get("step_label")
+            job["completed_units"] = list(event.get("completed_units", job.get("completed_units", [])))
+            job["pending_units"] = list(event.get("pending_units", job.get("pending_units", [])))
+            job["progress_ratio"] = float(event.get("progress_ratio", job.get("progress_ratio", 0.0)) or 0.0)
+            job["current_subtask"] = None
+            job["current_subtask_ratio"] = None
+            job["current_subtask_label"] = ""
+            return
+
+        if event_type in {"module_complete", "step_complete"}:
+            job["current_unit"] = event.get("module_name") or event.get("step_label")
+            job["completed_units"] = list(event.get("completed_units", job.get("completed_units", [])))
+            job["pending_units"] = list(event.get("pending_units", job.get("pending_units", [])))
+            job["progress_ratio"] = float(event.get("progress_ratio", job.get("progress_ratio", 0.0)) or 0.0)
+            job["current_subtask"] = None
+            job["current_subtask_ratio"] = None
+            job["current_subtask_label"] = ""
+            return
+
+        if event_type == "module_error":
+            job["current_unit"] = event.get("module_name")
+            job["traceback"] = str(event.get("message", ""))
+            return
+
+        if event_type in {"subtask_start", "subtask_progress", "subtask_complete"}:
+            job["current_subtask"] = event.get("subtask")
+            job["current_subtask_ratio"] = float(event.get("progress_ratio", 0.0) or 0.0)
+            job["current_subtask_label"] = str(event.get("progress_label", "") or "")
+
+
+class _StreamingJobCapture(io.TextIOBase):
+    def __init__(self, sink: io.StringIO, job_id: str):
+        self._sink = sink
+        self._job_id = job_id
+        self._pending = ""
+
+    def write(self, text: str) -> int:
+        self._sink.write(text)
+        self._pending += text
+        while "\n" in self._pending:
+            line, self._pending = self._pending.split("\n", maxsplit=1)
+            _append_job_logs(self._job_id, line)
+        return len(text)
+
+    def flush(self) -> None:
+        if self._pending.strip():
+            _append_job_logs(self._job_id, self._pending.strip())
+        self._pending = ""
+        self._sink.flush()
+
+
 def _sync_background_result() -> None:
     job_id = st.session_state.get("active_job_id")
     job = _get_job(job_id)
     if not job:
         return
-    if job["state"] == "finished":
+    if job["state"] in {"success", "error", "cancelled"}:
         st.session_state["result"] = deepcopy(job["result"])
         st.session_state["active_job_id"] = None
 
 
+def _capture_run(label: str, callback, job_id: str):
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+    start = time.perf_counter()
+    out_stream = _StreamingJobCapture(stdout_buffer, job_id)
+    err_stream = _StreamingJobCapture(stderr_buffer, job_id)
+    try:
+        with redirect_stdout(out_stream), redirect_stderr(err_stream):
+            callback(
+                lambda event: _apply_progress_event(job_id, event),
+                lambda: _job_cancel_requested(job_id),
+            )
+    except JobCancelledError:
+        return {
+            "label": label,
+            "status": "cancelled",
+            "duration": time.perf_counter() - start,
+            "output": (stdout_buffer.getvalue() + "\n" + stderr_buffer.getvalue()).strip(),
+            "traceback": "",
+        }
+    except Exception:
+        return {
+            "label": label,
+            "status": "error",
+            "duration": time.perf_counter() - start,
+            "output": (stdout_buffer.getvalue() + "\n" + stderr_buffer.getvalue()).strip(),
+            "traceback": traceback.format_exc(),
+        }
+    finally:
+        out_stream.flush()
+        err_stream.flush()
+    return {
+        "label": label,
+        "status": "success",
+        "duration": time.perf_counter() - start,
+        "output": (stdout_buffer.getvalue() + "\n" + stderr_buffer.getvalue()).strip(),
+        "traceback": "",
+    }
+
+
 def _start_background_job(label: str, callback) -> None:
     current_job = _get_job(st.session_state.get("active_job_id"))
-    if current_job and current_job["state"] == "running":
+    if current_job and current_job["state"] in {"running", "cancelling"}:
         st.session_state["result"] = {
             "label": label,
             "status": "error",
@@ -382,26 +576,20 @@ def _start_background_job(label: str, callback) -> None:
         return
 
     job_id = uuid4().hex
-    _set_job(
-        job_id,
-        {
-            "state": "running",
-            "label": label,
-            "started_at": time.time(),
-            "result": None,
-        },
-    )
+    payload = _create_job_payload(label)
+    payload["state"] = "running"
+    _set_job(job_id, payload)
 
     def _runner() -> None:
-        result = _capture_run(label, callback)
-        _set_job(
+        result = _capture_run(label, callback, job_id)
+        end_state = result["status"]
+        _update_job(
             job_id,
-            {
-                "state": "finished",
-                "label": label,
-                "started_at": _get_job(job_id)["started_at"] if _get_job(job_id) else time.time(),
-                "result": result,
-            },
+            state=end_state,
+            finished_at=time.time(),
+            result=result,
+            traceback=result["traceback"],
+            progress_ratio=1.0 if end_state == "success" else _get_job(job_id).get("progress_ratio", 0.0),
         )
 
     Thread(target=_runner, daemon=True).start()
@@ -410,7 +598,7 @@ def _start_background_job(label: str, callback) -> None:
         "label": label,
         "status": "running",
         "duration": 0.0,
-        "output": "任务已提交到后台。你可以留在当前页查看状态，也可以返回主页后稍后刷新。",
+        "output": "任务已提交到后台。",
         "traceback": "",
     }
 
@@ -448,38 +636,19 @@ def _patched_config(module, **updates):
         module.CONFIG.update(original)
 
 
-def _capture_run(label: str, callback):
-    stdout_buffer = io.StringIO()
-    stderr_buffer = io.StringIO()
-    start = time.perf_counter()
-    try:
-        with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
-            callback()
-    except Exception:
-        return {
-            "label": label,
-            "status": "error",
-            "duration": time.perf_counter() - start,
-            "output": (stdout_buffer.getvalue() + "\n" + stderr_buffer.getvalue()).strip(),
-            "traceback": traceback.format_exc(),
-        }
-    return {
-        "label": label,
-        "status": "success",
-        "duration": time.perf_counter() - start,
-        "output": (stdout_buffer.getvalue() + "\n" + stderr_buffer.getvalue()).strip(),
-        "traceback": "",
-    }
-
-
 def _run_main_action() -> None:
     debug = bool(st.session_state["debug"])
     use_proxy = bool(st.session_state["use_proxy"])
     modules = list(st.session_state["main_modules"])
 
-    def _job() -> None:
+    def _job(progress_callback, cancel_check) -> None:
         with _temporary_env(debug, use_proxy):
-            main_entry.main(debug=debug, modules=modules)
+            main_entry.main(
+                debug=debug,
+                modules=modules,
+                progress_callback=progress_callback,
+                cancel_check=cancel_check,
+            )
 
     _start_background_job("主报表", _job)
 
@@ -495,14 +664,14 @@ def _run_gainer_action() -> None:
         }
         return
 
-    current_date = st.session_state["gainer_current_date"].strftime("%Y-%m-%d")
-    previous_date = st.session_state["gainer_previous_date"].strftime("%Y-%m-%d")
+    current_date = st.session_state["gainer_current_date"]
+    previous_date = st.session_state["gainer_previous_date"]
     current_gold = float(st.session_state["gainer_current_gold_price"])
     previous_gold = float(st.session_state["gainer_previous_gold_price"])
     debug = bool(st.session_state["debug"])
     use_proxy = bool(st.session_state["use_proxy"])
 
-    def _job() -> None:
+    def _job(progress_callback, cancel_check) -> None:
         with _patched_config(
             gainer_entry,
             current_date=current_date,
@@ -511,7 +680,7 @@ def _run_gainer_action() -> None:
             previous_gold_price=previous_gold,
         ):
             with _temporary_env(debug, use_proxy):
-                gainer_entry.main()
+                gainer_entry.main(progress_callback=progress_callback, cancel_check=cancel_check)
 
     _start_background_job("Gainer", _job)
 
@@ -543,7 +712,9 @@ def _run_overall_action(config) -> None:
     debug = bool(st.session_state["debug"])
     use_proxy = bool(st.session_state["use_proxy"])
 
-    def _job() -> None:
+    def _job(progress_callback, cancel_check) -> None:
+        if cancel_check():
+            raise JobCancelledError("任务已被取消。")
         with _patched_config(
             overall_entry,
             input_path=input_path,
@@ -552,6 +723,8 @@ def _run_overall_action(config) -> None:
         ):
             with _temporary_env(debug, use_proxy):
                 overall_entry.main()
+        if cancel_check():
+            raise JobCancelledError("任务已被取消。")
 
     _start_background_job("整体表", _job)
 
@@ -560,47 +733,104 @@ def _run_validation_action() -> None:
     debug = bool(st.session_state["debug"])
     use_proxy = bool(st.session_state["use_proxy"])
 
-    def _job() -> None:
+    def _job(progress_callback, cancel_check) -> None:
+        if cancel_check():
+            raise JobCancelledError("任务已被取消。")
         with _temporary_env(debug, use_proxy):
             validate_outputs.main()
+        if cancel_check():
+            raise JobCancelledError("任务已被取消。")
 
     _start_background_job("全量校验", _job)
 
 
-def _render_result_panel() -> None:
-    active_job = _get_job(st.session_state.get("active_job_id"))
-    if active_job and active_job["state"] == "running":
-        elapsed = max(0.0, time.time() - float(active_job["started_at"]))
-        st.markdown(
-            f"""
-            <div class="amr-result">
-                <strong style="color:#b7791f;">{active_job["label"]} · 运行中</strong><br />
-                已持续 {elapsed:.1f} 秒
-            </div>
-            """,
-            unsafe_allow_html=True,
+def _format_unit_items(items: list[object]) -> str:
+    formatted: list[str] = []
+    for item in items:
+        text = str(item)
+        formatted.append(MODULE_LABELS.get(text, text))
+    return "、".join(formatted) if formatted else "无"
+
+
+def _render_job_snapshot(job: dict[str, object]) -> None:
+    elapsed = max(0.0, time.time() - float(job["started_at"]))
+    state = str(job.get("state", "running"))
+    if state == "running":
+        state_text = "运行中"
+        state_color = "#b7791f"
+    elif state == "cancelling":
+        state_text = "取消中"
+        state_color = "#8b5e15"
+    elif state == "cancelled":
+        state_text = "已取消"
+        state_color = "#8f2d2d"
+    elif state == "success":
+        state_text = "成功"
+        state_color = "#176b4d"
+    else:
+        state_text = "失败"
+        state_color = "#8f2d2d"
+
+    st.markdown(
+        f"""
+        <div class="amr-result">
+            <strong style="color:{state_color};">{job["label"]} · {state_text}</strong><br />
+            已持续 {elapsed:.1f} 秒
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.progress(float(job.get("progress_ratio", 0.0) or 0.0), text=f"总体进度 {float(job.get('progress_ratio', 0.0) or 0.0) * 100:.0f}%")
+    if job.get("current_unit"):
+        st.caption(f"当前模块 / 步骤：{MODULE_LABELS.get(str(job['current_unit']), str(job['current_unit']))}")
+    if job.get("current_subtask_label"):
+        st.progress(
+            float(job.get("current_subtask_ratio", 0.0) or 0.0),
+            text=f"当前子任务：{job['current_subtask_label']}",
         )
-        st.info("任务正在后台运行。可以点击“刷新状态”查看最新结果，或返回主页继续其他操作。")
-        cols = st.columns(2)
-        cols[0].button("刷新状态", key=f"refresh-{active_job['label']}", use_container_width=True)
-        cols[1].button(
+    info_cols = st.columns(2)
+    info_cols[0].caption(f"已完成：{_format_unit_items(list(job.get('completed_units', [])))}")
+    info_cols[1].caption(f"待执行：{_format_unit_items(list(job.get('pending_units', [])))}")
+    if state in {"running", "cancelling"}:
+        if state == "running":
+            st.info("任务正在后台运行，页面会自动刷新。")
+        else:
+            st.warning("正在取消任务，等待当前步骤安全结束。")
+        action_cols = st.columns(3)
+        action_cols[0].button("刷新状态", key=f"refresh-{job['label']}", use_container_width=True)
+        action_cols[1].button(
+            "取消当前任务",
+            key=f"cancel-{job['label']}",
+            use_container_width=True,
+            on_click=_cancel_active_job,
+        )
+        action_cols[2].button(
             "返回概览",
-            key=f"home-while-running-{active_job['label']}",
+            key=f"home-while-running-{job['label']}",
             use_container_width=True,
             on_click=_set_workspace,
             args=("home",),
         )
-        if st.session_state.get("result", {}).get("status") == "running":
-            st.code(st.session_state["result"]["output"], language="text")
+    logs = "\n".join(list(job.get("logs", []))[-24:])
+    if logs:
+        st.code(logs, language="text")
+
+
+@st.fragment(run_every="2s")
+def _render_result_panel() -> None:
+    _sync_background_result()
+    active_job = _get_job(st.session_state.get("active_job_id"))
+    if active_job:
+        _render_job_snapshot(active_job)
         return
 
     result = st.session_state.get("result")
     if not result:
         return
 
-    if result["status"] == "running":
-        status_text = "运行中"
-        status_color = "#b7791f"
+    if result["status"] == "cancelled":
+        status_text = "已取消"
+        status_color = "#8f2d2d"
     else:
         status_text = "成功" if result["status"] == "success" else "失败"
         status_color = "#176b4d" if result["status"] == "success" else "#8f2d2d"
@@ -626,7 +856,7 @@ def _clear_result() -> None:
 def _render_sidebar(config) -> None:
     with st.sidebar:
         st.markdown("### 控制台设置")
-        st.caption("工作台从主页卡片进入，当前页内展开。")
+        st.caption("主页进入工作台，运行状态自动刷新。")
         st.checkbox("启用 debug", key="debug")
         st.checkbox("启用代理", key="use_proxy")
         st.button(
@@ -638,11 +868,15 @@ def _render_sidebar(config) -> None:
 
         st.markdown("---")
         active_job = _get_job(st.session_state.get("active_job_id"))
-        if active_job and active_job["state"] == "running":
+        if active_job and active_job["state"] in {"running", "cancelling"}:
             st.markdown("#### 后台任务")
-            st.caption(f"{active_job['label']} 运行中")
+            st.caption(f"{active_job['label']} · {'取消中' if active_job['state'] == 'cancelling' else '运行中'}")
             st.caption(f"已持续 {max(0.0, time.time() - float(active_job['started_at'])):.1f} 秒")
+            if active_job.get("current_unit"):
+                st.caption(f"当前：{MODULE_LABELS.get(str(active_job['current_unit']), str(active_job['current_unit']))}")
+            st.progress(float(active_job.get("progress_ratio", 0.0) or 0.0))
             st.button("刷新状态", key="refresh-sidebar", use_container_width=True)
+            st.button("取消当前任务", key="cancel-sidebar", use_container_width=True, on_click=_cancel_active_job)
             st.markdown("---")
         st.markdown("#### 当前目录")
         st.caption(f"项目根目录: `{config.project_root}`")
@@ -680,8 +914,7 @@ def _render_home() -> None:
             <div class="amr-eyebrow">Asset Management Report</div>
             <h1>资产管理报表控制台</h1>
             <p>
-                以统一参数和统一口径驱动主报表、Gainer、整体表与回归校验。
-                页面默认以代理模式运行，避免数据抓取链路在日常使用中反复手动切换。
+                统一参数驱动主报表、Gainer、整体表与校验。
             </p>
         </section>
         """,
@@ -708,23 +941,23 @@ def _render_home() -> None:
         <div class="amr-panel">
             <h3>交互逻辑</h3>
             <p>
-                主页负责导航；各工作台负责参数编辑和执行；所有执行结果固定显示在结果区，不再因按钮触发而出现整页空白。
+                后台任务会自动刷新状态，支持查看已完成模块、当前步骤和运行日志。
             </p>
             <div class="amr-meta">
-                默认启用代理。运行结果、报错和日志都会停留在页面中，便于复核和回退。
+                默认启用代理。长任务可取消，结果与日志会保留在页面中。
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
     st.markdown(
-        '<div class="amr-inline-note">如果任务执行失败，错误日志会保留在当前页，不会再跳成空白页面。</div>',
+        '<div class="amr-inline-note">执行过程中可随时查看日志、刷新状态或返回主页。</div>',
         unsafe_allow_html=True,
     )
 
 
 def _render_main_page() -> None:
-    _render_workspace_header("主报表工作台", "选择需要执行的资产模块，运行结果会固定停留在当前页底部。")
+    _render_workspace_header("主报表工作台", "选择模块并运行，页面会显示已完成模块与当前进度。")
     st.multiselect(
         "主报表模块",
         options=[key for key, _ in MODULE_OPTIONS],
@@ -738,7 +971,7 @@ def _render_main_page() -> None:
 
 
 def _render_gainer_page() -> None:
-    _render_workspace_header("Gainer 工作台", "在页面中直接定义日期和黄金价格，避免后台脚本再回退到命令行交互。")
+    _render_workspace_header("Gainer 工作台", "直接填写日期与金价，页面会显示步骤进度与日志。")
     col1, col2 = st.columns(2)
     col1.date_input("本周末日期", key="gainer_current_date")
     col2.date_input("两周前日期", key="gainer_previous_date")
@@ -752,7 +985,7 @@ def _render_gainer_page() -> None:
 
 def _render_overall_page(config) -> None:
     _restore_overall_paths(config)
-    _render_workspace_header("整体表工作台", "处理整理好的整体.xlsx 输入，并稳定输出处理后的总表与日志。")
+    _render_workspace_header("整体表工作台", "处理整体.xlsx，并输出处理后的总表与日志。")
     st.text_input("输入文件", key="overall_input_path_text")
     st.text_input("输出文件", key="overall_output_path_text")
     st.text_input("日志文件", key="overall_log_path_text")
@@ -764,7 +997,7 @@ def _render_overall_page(config) -> None:
 
 
 def _render_validation_page() -> None:
-    _render_workspace_header("校验工作台", "对 main / codex 已落盘输出执行回归比较，并刷新对比报告。")
+    _render_workspace_header("校验工作台", "对 main / codex 输出执行回归比较，并刷新对比报告。")
     st.markdown(
         """
         <div class="amr-panel">

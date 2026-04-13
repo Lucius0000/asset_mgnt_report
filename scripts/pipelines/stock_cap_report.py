@@ -13,6 +13,7 @@ import yfinance as yf
 from tqdm import tqdm
 import logging
 from datetime import datetime
+from src.asset_mgnt_report.services.progress import emit_progress, ensure_not_cancelled
 
 os.environ['http_proxy'] = 'http://127.0.0.1:7890'
 os.environ['https_proxy'] = 'http://127.0.0.1:7890'
@@ -106,13 +107,21 @@ def _yf_fetch_market_cap_with_method(ticker_symbol: str):
     return None, "fail"
 
 
-def _yf_market_caps_bulk(tickers, sleep_between=0.0, desc="Fetching"):
+def _yf_market_caps_bulk(
+    tickers,
+    sleep_between=0.0,
+    desc="Fetching",
+    progress_callback=None,
+    cancel_check=None,
+):
     """
     逐只调用 _yf_fetch_market_cap_with_method（为了稳妥与兼容），带进度条。
     返回 DataFrame：['代码','market_cap','method']
     """
     records = []
-    for sym in tqdm(tickers, desc=desc):
+    total = len(tickers)
+    for index, sym in enumerate(tqdm(tickers, desc=desc), start=1):
+        ensure_not_cancelled(cancel_check)
         try:
             mc, mtd = _retry(_yf_fetch_market_cap_with_method, sym, max_retries=3)
         except Exception:
@@ -120,10 +129,18 @@ def _yf_market_caps_bulk(tickers, sleep_between=0.0, desc="Fetching"):
         records.append({"代码": sym, "market_cap": mc, "method": mtd})
         if sleep_between > 0:
             time.sleep(sleep_between)
+        if index == total or index == 1 or index % max(1, total // 10 or 1) == 0:
+            emit_progress(
+                progress_callback,
+                "subtask_progress",
+                subtask=desc,
+                progress_label=f"{desc} {index}/{total}",
+                progress_ratio=index / total if total else 1.0,
+            )
     return pd.DataFrame(records)
 
 
-def get_hs300_cap():
+def get_hs300_cap(progress_callback=None, cancel_check=None):
     """
     获取沪深300总市值（将 hs300 与实时行情按 6 位证券代码合并）
     """
@@ -162,7 +179,14 @@ def get_hs300_cap():
     hs300_df["代码"] = hs300_df["成份券代码Constituent Code"].map(cn_to_yf)
 
     # 用 yfinance 获取市值
-    caps_df = _yf_market_caps_bulk(hs300_df["代码"].tolist(), sleep_between=0.0, desc="HS300")
+    emit_progress(progress_callback, "subtask_start", subtask="HS300", progress_label="HS300 0/300", progress_ratio=0.0)
+    caps_df = _yf_market_caps_bulk(
+        hs300_df["代码"].tolist(),
+        sleep_between=0.0,
+        desc="HS300",
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
+    )
     merged = pd.merge(
         hs300_df,
         caps_df,
@@ -194,10 +218,11 @@ def get_hs300_cap():
     method_counts = caps_df["method"].value_counts().to_dict()
     logging.info(f"HS300 method stats: {method_counts}")
 
+    emit_progress(progress_callback, "subtask_complete", subtask="HS300", progress_label="HS300 完成", progress_ratio=1.0)
     return formatted_cap
 
 
-def get_hsi_cap():
+def get_hsi_cap(progress_callback=None, cancel_check=None):
     '''
     获取恒生指数总市值
     算法：求和每个成分股市值
@@ -231,7 +256,14 @@ def get_hsi_cap():
     df["yf_code"] = df["代號"].map(hk_to_yf)
 
     # —— 从 yfinance 获取市值（HKD），并带进度条 —— 
-    caps_df = _yf_market_caps_bulk(df["yf_code"].tolist(), sleep_between=0.0, desc="HSI")
+    emit_progress(progress_callback, "subtask_start", subtask="HSI", progress_label="HSI 0/成分股", progress_ratio=0.0)
+    caps_df = _yf_market_caps_bulk(
+        df["yf_code"].tolist(),
+        sleep_between=0.0,
+        desc="HSI",
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
+    )
     # yfinance 的结果列显式命名为 市值_yf，避免与原表冲突
     caps_df.rename(columns={"代码": "yf_code", "market_cap": "市值_yf"}, inplace=True)
 
@@ -261,6 +293,7 @@ def get_hsi_cap():
     method_counts = caps_df["method"].value_counts().to_dict()
     logging.info(f"HSI method stats: {method_counts}")
 
+    emit_progress(progress_callback, "subtask_complete", subtask="HSI", progress_label="HSI 完成", progress_ratio=1.0)
     return formatted_total
 
 
@@ -295,7 +328,7 @@ def _call_with_backoff(func, *args, max_retries=4, base_delay=2.0, jitter=(0.3, 
             attempt += 1
 
 
-def get_spy_cap(debug = False):
+def get_spy_cap(debug = False, progress_callback=None, cancel_check=None):
     """
     获取标普500市值信息，分别通过两个接口尝试并记录匹配情况与原始数据。
     @author: Lucius
@@ -336,7 +369,14 @@ def get_spy_cap(debug = False):
     yf_syms = [us_to_yf(s) for s in symbols_raw]
 
     # —— 用 yfinance 获取所有成分市值（USD），带进度条 —— 
-    caps_df = _yf_market_caps_bulk(yf_syms, sleep_between=0.0, desc="S&P 500")
+    emit_progress(progress_callback, "subtask_start", subtask="S&P 500", progress_label="S&P 500 0/成分股", progress_ratio=0.0)
+    caps_df = _yf_market_caps_bulk(
+        yf_syms,
+        sleep_between=0.0,
+        desc="S&P 500",
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
+    )
     caps_df.rename(columns={"market_cap": "MKT_CAP_PARSED"}, inplace=True)
     # 写盘原始
     caps_df.to_excel(os.path.join(raw_data_dir, "sp500_yf_market_caps.xlsx"), index=False)
@@ -405,16 +445,17 @@ def get_spy_cap(debug = False):
     method_counts = caps_df["method"].value_counts().to_dict()
     logging.info(f"S&P500 method stats: {method_counts}")
 
+    emit_progress(progress_callback, "subtask_complete", subtask="S&P 500", progress_label="S&P 500 完成", progress_ratio=1.0)
     return spy_cap
 
 
-def get_all_index_caps():
+def get_all_index_caps(progress_callback=None, cancel_check=None):
     """
     这是用于 asset_stock_index.py 调用的接口，不用于本代码输出，注意维护
     """
-    cn = get_hs300_cap()
-    us = get_spy_cap()
-    hk = get_hsi_cap()
+    cn = get_hs300_cap(progress_callback=progress_callback, cancel_check=cancel_check)
+    us = get_spy_cap(progress_callback=progress_callback, cancel_check=cancel_check)
+    hk = get_hsi_cap(progress_callback=progress_callback, cancel_check=cancel_check)
     return {"CN": cn, "HK": hk, "US": us}
 
 

@@ -9,6 +9,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.asset_mgnt_report.config.defaults import build_app_config
+from src.asset_mgnt_report.services.progress import JobCancelledError, emit_progress, ensure_not_cancelled
 from src.asset_mgnt_report.services.runtime import run_named_pipeline
 
 CONFIG = {
@@ -29,16 +30,85 @@ CONFIG = {
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-def main(debug: bool | None = None, modules: list[str] | None = None) -> None:
+def main(
+    debug: bool | None = None,
+    modules: list[str] | None = None,
+    progress_callback=None,
+    cancel_check=None,
+) -> None:
     config = build_app_config(overrides={"debug": CONFIG["debug"] if debug is None else debug})
     selected_modules = modules or CONFIG["modules"]
-    for module_name in selected_modules:
+    total_modules = len(selected_modules)
+    completed_modules: list[str] = []
+    emit_progress(
+        progress_callback,
+        "job_init",
+        total_units=total_modules,
+        pending_units=selected_modules,
+    )
+    for index, module_name in enumerate(selected_modules, start=1):
+        ensure_not_cancelled(cancel_check)
+        emit_progress(
+            progress_callback,
+            "module_start",
+            module_name=module_name,
+            module_index=index,
+            total_units=total_modules,
+            completed_units=completed_modules,
+            pending_units=selected_modules[index - 1 :],
+            progress_ratio=(index - 1) / total_modules if total_modules else 0.0,
+        )
         try:
-            run_named_pipeline(module_name, debug=config.debug)
+            run_named_pipeline(
+                module_name,
+                debug=config.debug,
+                progress_callback=progress_callback,
+                cancel_check=cancel_check,
+            )
         except TypeError:
-            run_named_pipeline(module_name)
+            try:
+                run_named_pipeline(
+                    module_name,
+                    debug=config.debug,
+                    progress_callback=progress_callback,
+                )
+            except TypeError:
+                try:
+                    run_named_pipeline(module_name, debug=config.debug)
+                except TypeError:
+                    run_named_pipeline(module_name)
+        except JobCancelledError:
+            emit_progress(
+                progress_callback,
+                "module_error",
+                module_name=module_name,
+                message="任务已取消",
+                completed_units=completed_modules,
+                pending_units=selected_modules[index - 1 :],
+                progress_ratio=(index - 1) / total_modules if total_modules else 0.0,
+            )
+            raise
         except Exception as exc:  # pragma: no cover - integration logging
             logging.error("%s 执行失败: %s", module_name, exc)
+            emit_progress(
+                progress_callback,
+                "module_error",
+                module_name=module_name,
+                message=str(exc),
+                completed_units=completed_modules,
+                pending_units=selected_modules[index:],
+                progress_ratio=(index - 1) / total_modules if total_modules else 0.0,
+            )
+            raise
+        completed_modules.append(module_name)
+        emit_progress(
+            progress_callback,
+            "module_complete",
+            module_name=module_name,
+            completed_units=completed_modules,
+            pending_units=selected_modules[index:],
+            progress_ratio=index / total_modules if total_modules else 1.0,
+        )
 
 
 if __name__ == "__main__":

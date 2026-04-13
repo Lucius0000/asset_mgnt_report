@@ -31,6 +31,8 @@ python scripts\tools\local_edge_gui.py --url <URL> --step expect=<文本> --step
   - 等待页面上出现包含该文本的元素
 - `click=按钮文案`
   - 点击包含该文案的按钮
+- `fill=标签::内容`
+  - 根据输入框标签文本找到对应输入框，并写入内容
 - `shot=截图名`
   - 保存当前页面截图到 `output/playwright`
 - `wait=秒数`

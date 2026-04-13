@@ -21,6 +21,7 @@ import pandas as pd
 from scripts.pipelines import gainer_bond, gainer_btc, gainer_gold, gainer_stock
 from src.asset_mgnt_report.config.defaults import build_app_config
 from src.asset_mgnt_report.config.inputs import resolve_config_value
+from src.asset_mgnt_report.services.progress import emit_progress, ensure_not_cancelled
 
 OUTPUT_PATH = Path("output") / "Gainer.xlsx"
 APP_CONFIG = build_app_config()
@@ -119,7 +120,12 @@ def _compute_bond_caps(current_date: datetime, previous_date: datetime) -> Dict[
     return results
 
 
-def _compute_stock_caps(date_old: str, date_new: str) -> Dict[str, Dict[str, Optional[float]]]:
+def _compute_stock_caps(
+    date_old: str,
+    date_new: str,
+    progress_callback=None,
+    cancel_check=None,
+) -> Dict[str, Dict[str, Optional[float]]]:
     results: Dict[str, Dict[str, Optional[float]]] = {
         "US": {"unit": "USD", "name": "S&P 500", "old": None, "new": None},
         "CN": {"unit": "CNY", "name": "HS300", "old": None, "new": None},
@@ -129,7 +135,15 @@ def _compute_stock_caps(date_old: str, date_new: str) -> Dict[str, Dict[str, Opt
     print("- 正在计算标普500市值差异...")
     try:
         sp500_syms = gainer_stock.get_sp500_symbols()
-        old_val, new_val = gainer_stock.compute_index_caps(sp500_syms, date_old, date_new, "USD", "S&P 500")
+        old_val, new_val = gainer_stock.compute_index_caps(
+            sp500_syms,
+            date_old,
+            date_new,
+            "USD",
+            "S&P 500",
+            progress_callback=progress_callback,
+            cancel_check=cancel_check,
+        )
         results["US"]["old"], results["US"]["new"] = old_val, new_val
     except Exception as exc:
         print(f"  [警告] 标普500市值计算失败：{exc}")
@@ -137,7 +151,15 @@ def _compute_stock_caps(date_old: str, date_new: str) -> Dict[str, Dict[str, Opt
     print("- 正在计算沪深300市值差异...")
     try:
         hs300_syms = gainer_stock.get_hs300_symbols()
-        old_val, new_val = gainer_stock.compute_index_caps(hs300_syms, date_old, date_new, "CNY", "HS300")
+        old_val, new_val = gainer_stock.compute_index_caps(
+            hs300_syms,
+            date_old,
+            date_new,
+            "CNY",
+            "HS300",
+            progress_callback=progress_callback,
+            cancel_check=cancel_check,
+        )
         results["CN"]["old"], results["CN"]["new"] = old_val, new_val
     except Exception as exc:
         print(f"  [警告] 沪深300市值计算失败：{exc}")
@@ -145,7 +167,15 @@ def _compute_stock_caps(date_old: str, date_new: str) -> Dict[str, Dict[str, Opt
     print("- 正在计算恒生指数市值差异...")
     try:
         hsi_syms = gainer_stock.get_hsi_symbols_from_excel()
-        old_val, new_val = gainer_stock.compute_index_caps(hsi_syms, date_old, date_new, "HKD", "HSI")
+        old_val, new_val = gainer_stock.compute_index_caps(
+            hsi_syms,
+            date_old,
+            date_new,
+            "HKD",
+            "HSI",
+            progress_callback=progress_callback,
+            cancel_check=cancel_check,
+        )
         results["HK"]["old"], results["HK"]["new"] = old_val, new_val
     except Exception as exc:
         print(f"  [警告] 恒生指数市值计算失败：{exc}")
@@ -172,7 +202,7 @@ def _compute_gold_caps(previous_price: float, current_price: float) -> Tuple[flo
     return prev_cap, curr_cap
 
 
-def main() -> None:
+def main(progress_callback=None, cancel_check=None) -> None:
     today = datetime.today()
     default_current = today.replace(hour=0, minute=0, second=0, microsecond=0)
     current_date = _prompt_date(f"请输入本周末日期（YYYY-MM-DD），周六最佳，回车默认 {default_current:%Y-%m-%d}:", default=default_current)
@@ -198,17 +228,37 @@ def main() -> None:
     date_old_str = previous_date.strftime("%Y-%m-%d")
     date_new_str = current_date.strftime("%Y-%m-%d")
 
+    steps = [
+        ("step_stock", "步骤 1 / 股票市值"),
+        ("step_bond", "步骤 2 / 债券市值"),
+        ("step_gold", "步骤 3 / 黄金市值"),
+        ("step_btc", "步骤 4 / BTC 市值"),
+    ]
+    emit_progress(progress_callback, "job_init", total_units=len(steps), pending_units=[label for _, label in steps])
+
+    ensure_not_cancelled(cancel_check)
     print("\n[步骤 1] 汇总股票市值数据")
-    stock_caps = _compute_stock_caps(date_old_str, date_new_str)
+    emit_progress(progress_callback, "step_start", step_key="step_stock", step_label=steps[0][1], completed_units=[], pending_units=[label for _, label in steps], progress_ratio=0.0)
+    stock_caps = _compute_stock_caps(date_old_str, date_new_str, progress_callback=progress_callback, cancel_check=cancel_check)
+    emit_progress(progress_callback, "step_complete", step_key="step_stock", step_label=steps[0][1], completed_units=[steps[0][1]], pending_units=[label for _, label in steps[1:]], progress_ratio=0.25)
 
+    ensure_not_cancelled(cancel_check)
     print("\n[步骤 2] 汇总债券市值数据")
+    emit_progress(progress_callback, "step_start", step_key="step_bond", step_label=steps[1][1], completed_units=[steps[0][1]], pending_units=[label for _, label in steps[1:]], progress_ratio=0.25)
     bond_caps = _compute_bond_caps(current_date, previous_date)
+    emit_progress(progress_callback, "step_complete", step_key="step_bond", step_label=steps[1][1], completed_units=[label for _, label in steps[:2]], pending_units=[label for _, label in steps[2:]], progress_ratio=0.5)
 
+    ensure_not_cancelled(cancel_check)
     print("\n[步骤 3] 汇总黄金市值数据")
+    emit_progress(progress_callback, "step_start", step_key="step_gold", step_label=steps[2][1], completed_units=[label for _, label in steps[:2]], pending_units=[label for _, label in steps[2:]], progress_ratio=0.5)
     gold_prev, gold_curr = _compute_gold_caps(previous_gold_price, current_gold_price)
+    emit_progress(progress_callback, "step_complete", step_key="step_gold", step_label=steps[2][1], completed_units=[label for _, label in steps[:3]], pending_units=[label for _, label in steps[3:]], progress_ratio=0.75)
 
+    ensure_not_cancelled(cancel_check)
     print("\n[步骤 4] 汇总 BTC 市值数据")
+    emit_progress(progress_callback, "step_start", step_key="step_btc", step_label=steps[3][1], completed_units=[label for _, label in steps[:3]], pending_units=[label for _, label in steps[3:]], progress_ratio=0.75)
     btc_prev, btc_curr = _compute_btc_caps(previous_date, current_date)
+    emit_progress(progress_callback, "step_complete", step_key="step_btc", step_label=steps[3][1], completed_units=[label for _, label in steps], pending_units=[], progress_ratio=1.0)
 
     rows: List[Dict[str, Optional[str]]] = []
 

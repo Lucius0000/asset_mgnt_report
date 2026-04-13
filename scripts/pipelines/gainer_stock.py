@@ -40,6 +40,7 @@ except Exception:
 
 import yfinance as yf
 import akshare as ak
+from src.asset_mgnt_report.services.progress import emit_progress, ensure_not_cancelled
 
 # 如需代理，请保留；否则可注释掉
 os.environ['http_proxy'] = 'http://127.0.0.1:7890'
@@ -278,7 +279,15 @@ def get_hs300_symbols() -> List[str]:
 
 # 市值计算：接受成分股列表和两个日期，遍历每只股票，获取其在这两个日期的收盘价和流通股数，计算市值。
 # 重试机制：如果某只股票数据获取失败，会记录并进行二次尝试。
-def compute_index_caps(symbols: List[str], date_old: str, date_new: str, unit: str, name: str) -> Tuple[Optional[float], Optional[float]]:
+def compute_index_caps(
+    symbols: List[str],
+    date_old: str,
+    date_new: str,
+    unit: str,
+    name: str,
+    progress_callback=None,
+    cancel_check=None,
+) -> Tuple[Optional[float], Optional[float]]:
     """
     For a list of yfinance symbols, compute total free-float cap at two dates.
     Adds a second-pass batch retry for tickers that failed in the first pass.
@@ -295,7 +304,16 @@ def compute_index_caps(symbols: List[str], date_old: str, date_new: str, unit: s
     rows_map: Dict[str, Dict[str, object]] = {}
 
     # -------- 首轮遍历 --------
-    for sym in tqdm(symbols, desc=f"{name} 成分股估算", ncols=90):
+    total_symbols = len(symbols)
+    emit_progress(
+        progress_callback,
+        "subtask_start",
+        subtask=name,
+        progress_label=f"{name} 0/{total_symbols}",
+        progress_ratio=0.0,
+    )
+    for processed_count, sym in enumerate(tqdm(symbols, desc=f"{name} 成分股估算", ncols=90), start=1):
+        ensure_not_cancelled(cancel_check)
         try:
             det = _nearest_cap_with_details(sym, (date_old, date_new))
             co = det[date_old]["cap"]
@@ -363,6 +381,14 @@ def compute_index_caps(symbols: List[str], date_old: str, date_new: str, unit: s
                 "recovered_old": 0,
                 "recovered_new": 0,
             }
+        if processed_count == total_symbols or processed_count == 1 or processed_count % max(1, total_symbols // 12 or 1) == 0:
+            emit_progress(
+                progress_callback,
+                "subtask_progress",
+                subtask=name,
+                progress_label=f"{name} {processed_count}/{total_symbols}",
+                progress_ratio=processed_count / total_symbols if total_symbols else 1.0,
+            )
 
     # -------- 二次批量重试（仅对首轮失败个股）--------
     failed = list(missing.keys())
@@ -371,7 +397,9 @@ def compute_index_caps(symbols: List[str], date_old: str, date_new: str, unit: s
         time.sleep(2.0)  # 微间隔，减少限频
 
         rec_old = rec_new = 0
-        for sym in tqdm(failed, desc=f"{name} 二次尝试", ncols=90):
+        failed_total = len(failed)
+        for retry_count, sym in enumerate(tqdm(failed, desc=f"{name} 二次尝试", ncols=90), start=1):
+            ensure_not_cancelled(cancel_check)
             missing[sym]["retried"] = 1
             rows_map[sym]["retried"] = 1
             try:
@@ -406,6 +434,14 @@ def compute_index_caps(symbols: List[str], date_old: str, date_new: str, unit: s
                 rows_map[sym]["cap_new"] = cn2
                 rows_map[sym]["shares"] = det2.get("shares")
                 rec_new += 1
+            if retry_count == failed_total or retry_count == 1 or retry_count % max(1, failed_total // 6 or 1) == 0:
+                emit_progress(
+                    progress_callback,
+                    "subtask_progress",
+                    subtask=name,
+                    progress_label=f"{name} 二次尝试 {retry_count}/{failed_total}",
+                    progress_ratio=retry_count / failed_total if failed_total else 1.0,
+                )
 
         logger.info(f"{name}: 二次尝试恢复 —— 旧日 {rec_old} / 新日 {rec_new}")
 
@@ -427,6 +463,13 @@ def compute_index_caps(symbols: List[str], date_old: str, date_new: str, unit: s
         logger.info(f"{name}: 未获取到价格/股本的股票清单已保存：{out_csv}（{len(rows)} 只）")
 
     logger.info(f"{name}: 缺失(旧日){miss_old} / 缺失(新日){miss_new}")
+    emit_progress(
+        progress_callback,
+        "subtask_complete",
+        subtask=name,
+        progress_label=f"{name} 完成",
+        progress_ratio=1.0,
+    )
     return (total_old if total_old > 0 else None,
             total_new if total_new > 0 else None)
 

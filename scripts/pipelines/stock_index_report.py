@@ -21,6 +21,7 @@ from src.asset_mgnt_report.metrics.annualization import annualized_return_from_p
 from src.asset_mgnt_report.metrics.returns import compute_daily_returns
 from src.asset_mgnt_report.metrics.sharpe import sharpe_ratio as shared_sharpe_ratio
 from src.asset_mgnt_report.metrics.volatility import annualized_volatility
+from src.asset_mgnt_report.services.progress import JobCancelledError, emit_progress, ensure_not_cancelled
         
 
 # 设置日志
@@ -67,8 +68,10 @@ class StockIndexAnalyzer:
         TimePeriod('5-Year', 1825, True)       # 1825天 (约5年) - 几何平均
     ]
     
-    def __init__(self, debug: bool = False):
+    def __init__(self, debug: bool = False, progress_callback=None, cancel_check=None):
         self.debug = debug
+        self.progress_callback = progress_callback
+        self.cancel_check = cancel_check
         # 验证时间周期配置
         self._validate_time_periods()
     
@@ -363,7 +366,16 @@ class StockIndexAnalyzer:
         
         market_data = {}
         
-        for market in self.MARKETS.keys():
+        total_markets = len(self.MARKETS)
+        for index, market in enumerate(self.MARKETS.keys(), start=1):
+            ensure_not_cancelled(self.cancel_check)
+            emit_progress(
+                self.progress_callback,
+                "subtask_progress",
+                subtask="股票指数数据抓取",
+                progress_label=f"{self.MARKETS[market].name} {index}/{total_markets}",
+                progress_ratio=index / total_markets,
+            )
             data = self.fetch_market_data(market, time_range)
             market_data[market] = data
         
@@ -458,8 +470,20 @@ class StockIndexAnalyzer:
         output = defaultdict(dict)
         
         # 获取指数总市值
-        time.sleep(20)
-        index_caps = get_all_index_caps()
+        emit_progress(self.progress_callback, "subtask_start", subtask="股票指数市值", progress_label="准备计算股指总市值", progress_ratio=0.0)
+        for second in range(20):
+            ensure_not_cancelled(self.cancel_check)
+            emit_progress(
+                self.progress_callback,
+                "subtask_progress",
+                subtask="股票指数市值",
+                progress_label=f"准备计算股指总市值 {second + 1}/20",
+                progress_ratio=(second + 1) / 20,
+            )
+            time.sleep(1)
+        ensure_not_cancelled(self.cancel_check)
+        index_caps = get_all_index_caps(progress_callback=self.progress_callback, cancel_check=self.cancel_check)
+        emit_progress(self.progress_callback, "subtask_complete", subtask="股票指数市值", progress_label="股指总市值完成", progress_ratio=1.0)
     
         ordered_markets = ['US', 'CN', 'HK']
     
@@ -611,6 +635,7 @@ class StockIndexAnalyzer:
         """运行完整分析"""
         try:
             logger.info(f"Starting stock index analysis... (time_range={time_range} days, debug={self.debug})")
+            emit_progress(self.progress_callback, "subtask_start", subtask="股票权益", progress_label="开始抓取指数数据", progress_ratio=0.0)
             
             # 获取所有市场数据
             market_data = self.get_all_market_data(time_range)
@@ -624,14 +649,21 @@ class StockIndexAnalyzer:
                 self.print_detailed_analysis(market_data, time_range)
             
             # 打印汇总表格
+            emit_progress(self.progress_callback, "subtask_progress", subtask="股票权益", progress_label="汇总股票指数指标", progress_ratio=0.45)
             self.print_summary_table(market_data, time_range)
             
             # 输出汇总表格
+            emit_progress(self.progress_callback, "subtask_progress", subtask="股票权益", progress_label="导出股票指数结果", progress_ratio=0.55)
             self.export_summary_table_to_csv(market_data, time_range)
             self.export_weekly_report_table_to_csv(market_data)
+            emit_progress(self.progress_callback, "subtask_complete", subtask="股票权益", progress_label="股票权益完成", progress_ratio=1.0)
             
+        except JobCancelledError:
+            logger.info("Stock index analysis cancelled.")
+            raise
         except Exception as e:
             logger.error(f"Analysis failed: {str(e)}")
+            raise
 
     
     def print_detailed_analysis(self, market_data: Dict[str, pd.DataFrame], time_range: int):
@@ -681,9 +713,9 @@ class StockIndexAnalyzer:
             else:
                 print(f"\n{config.name} ({market}) - Data fetch failed")
 
-def main(time_range: int = 2920, debug: bool = False):
+def main(time_range: int = 2920, debug: bool = False, progress_callback=None, cancel_check=None):
     """主函数"""
-    analyzer = StockIndexAnalyzer(debug=debug)
+    analyzer = StockIndexAnalyzer(debug=debug, progress_callback=progress_callback, cancel_check=cancel_check)
     analyzer.run_analysis(time_range=time_range)
 
 if __name__ == "__main__":

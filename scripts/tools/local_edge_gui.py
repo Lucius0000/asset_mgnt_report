@@ -54,6 +54,24 @@ def _click_button(driver: webdriver.Edge, wait: WebDriverWait, text: str) -> Non
     wait.until(EC.element_to_be_clickable((By.XPATH, xpath))).click()
 
 
+def _fill_input(driver: webdriver.Edge, wait: WebDriverWait, label: str, value: str) -> None:
+    label_xpath = (
+        f"//label[.//*[contains(normalize-space(),\"{label}\")] or contains(normalize-space(),\"{label}\")]"
+    )
+    label_el = wait.until(EC.presence_of_element_located((By.XPATH, label_xpath)))
+    for_attr = label_el.get_attribute("for")
+    if for_attr:
+        input_xpath = f"//*[@id=\"{for_attr}\"]"
+    else:
+        input_xpath = (
+            f"{label_xpath}/following::input[1] | "
+            f"{label_xpath}/following::textarea[1]"
+        )
+    input_el = wait.until(EC.element_to_be_clickable((By.XPATH, input_xpath)))
+    input_el.clear()
+    input_el.send_keys(value)
+
+
 def _save_screenshot(driver: webdriver.Edge, output_dir: Path, index: int, name: str) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"{index:02d}-{_slugify(name)}.png"
@@ -69,7 +87,7 @@ def _iter_steps(raw_steps: Iterable[str]) -> list[tuple[str, str]]:
         verb, value = raw.split("=", maxsplit=1)
         verb = verb.strip().lower()
         value = value.strip()
-        if verb not in {"expect", "click", "shot", "wait"}:
+        if verb not in {"expect", "click", "shot", "wait", "fill"}:
             raise ValueError(f"不支持的 step 动作: {verb}")
         steps.append((verb, value))
     return steps
@@ -82,7 +100,7 @@ def main() -> None:
         "--step",
         action="append",
         default=[],
-        help="执行步骤，格式如 expect=资产管理报表控制台 / click=打开 主报表工作台 / wait=3 / shot=home。",
+        help="执行步骤，格式如 expect=文本 / click=按钮 / fill=标签::内容 / wait=3 / shot=home。",
     )
     parser.add_argument(
         "--output-dir",
@@ -129,6 +147,10 @@ def main() -> None:
                 seconds = float(value)
                 time.sleep(seconds)
                 print(f"[wait] {seconds:.1f}s")
+            elif verb == "fill":
+                label, fill_value = value.split("::", maxsplit=1)
+                _fill_input(driver, wait, label.strip(), fill_value)
+                print(f"[fill] {label.strip()}")
 
         logs = driver.get_log("browser")
         if logs:

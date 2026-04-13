@@ -22,7 +22,7 @@
 ## 命令格式
 
 ```powershell
-python scripts\tools\local_edge_gui.py --url <URL> --step expect=<文本> --step click=<按钮文案> --step expect=<文本> --step shot=<截图名>
+python scripts\tools\local_edge_gui.py --url <URL> --step expect=<文本> --step click=<按钮文案> --step wait=<秒数> --step expect=<文本> --step shot=<截图名>
 ```
 
 支持的步骤类型：
@@ -33,6 +33,8 @@ python scripts\tools\local_edge_gui.py --url <URL> --step expect=<文本> --step
   - 点击包含该文案的按钮
 - `shot=截图名`
   - 保存当前页面截图到 `output/playwright`
+- `wait=秒数`
+  - 在同一浏览器会话内等待固定秒数，适合长任务点击后再截图或再判断结果
 
 ## 当前项目的复用示例
 
@@ -52,6 +54,7 @@ python scripts\tools\local_edge_gui.py ^
   --url http://127.0.0.1:8532 ^
   --step expect=资产管理报表控制台 ^
   --step click=打开 主报表工作台 ^
+  --step wait=3 ^
   --step expect=主报表模块 ^
   --step shot=main-workspace ^
   --step click=返回概览 ^
@@ -99,4 +102,5 @@ python scripts\tools\local_edge_gui.py ^
 
 - 这个脚本依赖页面按钮文案做定位，所以按钮文字变了，命令里的 `click=` 文本也要一起改。
 - 如果页面启动较慢，可以把 `--timeout` 调大，例如 `--timeout 40`。
+- 如果点击某个按钮后需要等任务启动或刷新结果，可以在步骤里加入 `wait=2`、`wait=5` 这类固定等待。
 - 如果你只想后台验证，不弹出浏览器窗口，可以加 `--headless`。

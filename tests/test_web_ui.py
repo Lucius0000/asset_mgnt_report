@@ -1,6 +1,7 @@
 from streamlit.testing.v1 import AppTest
 
 from src.asset_mgnt_report.config.defaults import build_app_config
+from src.asset_mgnt_report.ui import streamlit_app
 
 
 APP_FILE = "scripts/web_ui.py"
@@ -53,3 +54,34 @@ def test_build_app_config_enables_proxy_by_default() -> None:
     config = build_app_config()
 
     assert config.use_proxy is True
+
+
+def test_overall_page_restores_blank_paths_to_defaults() -> None:
+    at = AppTest.from_file(APP_FILE)
+    at.session_state["active_workspace"] = "overall"
+    at.session_state["overall_input_path_text"] = ""
+    at.session_state["overall_output_path_text"] = ""
+    at.session_state["overall_log_path_text"] = ""
+
+    at.run()
+
+    assert not at.exception
+    assert at.session_state["overall_input_path_text"].endswith("data\\seeds\\整体.xlsx")
+    assert at.session_state["overall_output_path_text"].endswith("output\\整体_processed.xlsx")
+    assert at.session_state["overall_log_path_text"].endswith("output\\raw_data\\整体_calculation_steps.txt")
+
+
+def test_start_background_job_marks_result_running() -> None:
+    streamlit_app._JOB_REGISTRY.clear()
+    fake_state = {"active_job_id": None, "result": None}
+    original_state = streamlit_app.st.session_state
+    streamlit_app.st.session_state = fake_state
+    try:
+        streamlit_app._start_background_job("测试任务", lambda: None)
+        assert fake_state["active_job_id"]
+        assert fake_state["result"]["status"] == "running"
+        job = streamlit_app._get_job(fake_state["active_job_id"])
+        assert job is not None
+        assert job["state"] in {"running", "finished"}
+    finally:
+        streamlit_app.st.session_state = original_state

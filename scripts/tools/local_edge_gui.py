@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 from typing import Iterable
 
 
@@ -68,7 +69,7 @@ def _iter_steps(raw_steps: Iterable[str]) -> list[tuple[str, str]]:
         verb, value = raw.split("=", maxsplit=1)
         verb = verb.strip().lower()
         value = value.strip()
-        if verb not in {"expect", "click", "shot"}:
+        if verb not in {"expect", "click", "shot", "wait"}:
             raise ValueError(f"不支持的 step 动作: {verb}")
         steps.append((verb, value))
     return steps
@@ -81,7 +82,7 @@ def main() -> None:
         "--step",
         action="append",
         default=[],
-        help="执行步骤，格式如 expect=资产管理报表控制台 / click=打开 主报表工作台 / shot=home。",
+        help="执行步骤，格式如 expect=资产管理报表控制台 / click=打开 主报表工作台 / wait=3 / shot=home。",
     )
     parser.add_argument(
         "--output-dir",
@@ -124,6 +125,10 @@ def main() -> None:
             elif verb == "shot":
                 path = _save_screenshot(driver, output_dir, index, value)
                 print(f"[shot] {path}")
+            elif verb == "wait":
+                seconds = float(value)
+                time.sleep(seconds)
+                print(f"[wait] {seconds:.1f}s")
 
         logs = driver.get_log("browser")
         if logs:

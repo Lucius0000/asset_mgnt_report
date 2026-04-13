@@ -12,6 +12,14 @@
 - `output/`：生成产物，不纳入版本控制
 - `archive/legacy_code/`：历史代码归档
 
+## 浏览器实测
+- 只要任务涉及本机浏览器真实点击、localhost 页面回归、白屏复现、按钮是否可点、或用户明确要求“实际在浏览器里测试”，优先使用 `local-edge-gui` skill。
+- 默认 skill 路径：`C:\Users\Lucius\.codex\skills\local-edge-gui`
+- 默认脚本路径：`C:\Users\Lucius\.codex\skills\local-edge-gui\scripts\local_edge_gui.py`
+- 优先用 `expect=...` + `click=...` + `shot=...` 的步骤式验证，不要只依赖静态代码阅读、Streamlit AppTest 或 DOM 抓取结果。
+- 浏览器实测截图默认输出到当前仓库的 `output/playwright/`
+- 如果页面修复依赖浏览器交互验证，最终说明里要写明实际执行过的步骤和产出的截图文件。
+
 ## 环境变量
 - `FRED_API_KEY`
 - `AMR_DEBUG`

@@ -7,6 +7,7 @@
 
 ## 目录职责
 - `src/asset_mgnt_report/`：核心实现
+- `scripts/`：入口脚本、流程脚本、工具脚本
 - `data/seeds/`：版本控制的种子数据
 - `data/local/`：本地临时输入，不纳入版本控制
 - `output/`：生成产物，不纳入版本控制
@@ -22,10 +23,12 @@
 
 ## Spyder 与换行符
 - `scripts/` 下的 Python 脚本统一使用 LF，禁止混用 `CRLF` 与 `LF`，否则 Spyder 会提示“当前脚本文件使用了多个换行符”。
+- `codex` 根目录关键文档也统一使用 LF，至少包括 `AGENTS.md`、`Readme.md`、`docs/*.md`、`.gitignore`、`.gitattributes`、`pyproject.toml`、`requirements*.txt`、`compose.yaml`、`Dockerfile`。
 - 只要修改过 `scripts/` 下的 `.py` 文件，在提交前必须运行 `python scripts/tools/normalize_line_endings.py --quiet` 检查。
 - 如果检查发现混用换行符，立刻运行 `python scripts/tools/normalize_line_endings.py --write` 统一修复，再重新检查一次。
+- 如果修改了根目录文档或配置文件，提交前要确认这些文本文件也保持单一 LF；不要依赖编辑器自动转换。
 - 将本仓库同步到 `wealth-hunter` 之后，必须在目标仓库的 `asset_mgnt_report` 目录再执行一次同样的检查与修复，因为复制工具会原样保留文件字节内容。
-- 不要依赖编辑器自动转换；以仓库内的 `.gitattributes` 和 `scripts/tools/normalize_line_endings.py` 结果为准。
+- 以仓库内的 `.gitattributes` 和 `scripts/tools/normalize_line_endings.py` 的检查结果为准。
 
 ## 环境变量
 - `FRED_API_KEY`

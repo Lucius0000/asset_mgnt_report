@@ -440,14 +440,22 @@ def _render_result_panel() -> None:
         st.error(result["traceback"])
 
 
+def _clear_result() -> None:
+    st.session_state["result"] = None
+
+
 def _render_sidebar(config) -> None:
     with st.sidebar:
         st.markdown("### 控制台设置")
         st.caption("工作台从主页卡片进入，当前页内展开。")
         st.checkbox("启用 debug", key="debug")
         st.checkbox("启用代理", key="use_proxy")
-        if st.button("清空结果面板", key="clear-result-sidebar", use_container_width=True):
-            st.session_state["result"] = None
+        st.button(
+            "清空结果面板",
+            key="clear-result-sidebar",
+            use_container_width=True,
+            on_click=_clear_result,
+        )
 
         st.markdown("---")
         st.markdown("#### 当前目录")
@@ -470,7 +478,13 @@ def _render_workspace_header(title: str, description: str) -> None:
             unsafe_allow_html=True,
         )
     with right:
-        st.button("返回概览", key=f"back-{title}", use_container_width=True, on_click=_set_workspace, args=("home",))
+        st.button(
+            "返回概览",
+            key=f"back-{title}",
+            use_container_width=True,
+            on_click=_set_workspace,
+            args=("home",),
+        )
 
 
 def _render_home() -> None:
@@ -579,17 +593,17 @@ def _render_validation_page() -> None:
     _render_result_panel()
 
 
-config = build_app_config()
-st.set_page_config(page_title="Asset Management Report", page_icon="📊", layout="wide")
-_inject_styles()
-_ensure_state(config)
-_render_sidebar(config)
-_render_home()
+def render_app() -> None:
+    config = build_app_config()
+    st.set_page_config(page_title="Asset Management Report", page_icon="📊", layout="wide")
+    _inject_styles()
+    _ensure_state(config)
+    _render_sidebar(config)
 
-active_workspace = st.session_state["active_workspace"]
-if active_workspace != "home":
-    st.markdown('<div class="amr-section-label">当前工作台</div>', unsafe_allow_html=True)
-    if active_workspace == "main":
+    active_workspace = st.session_state["active_workspace"]
+    if active_workspace == "home":
+        _render_home()
+    elif active_workspace == "main":
         _render_main_page()
     elif active_workspace == "gainer":
         _render_gainer_page()
@@ -597,3 +611,10 @@ if active_workspace != "home":
         _render_overall_page()
     elif active_workspace == "validation":
         _render_validation_page()
+    else:
+        st.session_state["active_workspace"] = "home"
+        _render_home()
+
+
+if __name__ == "__main__":
+    render_app()

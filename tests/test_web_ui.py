@@ -27,6 +27,28 @@ def test_web_ui_home_renders_with_proxy_enabled() -> None:
     assert any(button.label == "打开 主报表工作台" for button in at.button)
 
 
+def test_home_button_navigates_to_main_workspace() -> None:
+    at = _run_page()
+
+    next(button for button in at.button if button.label == "打开 主报表工作台").click().run()
+
+    assert not at.exception
+    assert any(button.label == "返回概览" for button in at.button)
+    assert any(button.label == "执行主报表" for button in at.button)
+    assert len(at.multiselect) == 1
+    assert at.multiselect[0].label == "主报表模块"
+
+
+def test_clear_result_keeps_home_visible() -> None:
+    at = _run_page()
+
+    next(button for button in at.button if button.label == "清空结果面板").click().run()
+
+    assert not at.exception
+    assert any(button.label == "打开 主报表工作台" for button in at.button)
+    assert any(button.label == "清空结果面板" for button in at.button)
+
+
 def test_build_app_config_enables_proxy_by_default() -> None:
     config = build_app_config()
 

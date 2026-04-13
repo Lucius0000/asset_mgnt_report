@@ -25,6 +25,7 @@ _ensure_local_pytools()
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.edge.options import Options
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -68,6 +69,9 @@ def _fill_input(driver: webdriver.Edge, wait: WebDriverWait, label: str, value: 
             f"{label_xpath}/following::textarea[1]"
         )
     input_el = wait.until(EC.element_to_be_clickable((By.XPATH, input_xpath)))
+    input_el.click()
+    input_el.send_keys(Keys.CONTROL, "a")
+    input_el.send_keys(Keys.DELETE)
     input_el.clear()
     input_el.send_keys(value)
 

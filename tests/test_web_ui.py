@@ -40,6 +40,20 @@ def test_home_button_navigates_to_main_workspace() -> None:
     assert at.multiselect[0].label == "主报表模块"
 
 
+def test_gainer_page_uses_text_inputs_and_shows_lbma_hint() -> None:
+    at = _run_page("gainer")
+
+    assert not at.exception
+    labels = [widget.label for widget in at.text_input]
+    assert "本周末日期" in labels
+    assert "两周前日期" in labels
+    assert "本周末黄金价格（USD/oz）" in labels
+    assert "两周前黄金价格（USD/oz）" in labels
+    rendered_markdown = "\n".join(markdown.value for markdown in at.markdown)
+    assert "LBMA Gold Price" in rendered_markdown
+    assert "USD PM" in rendered_markdown
+
+
 def test_clear_result_keeps_home_visible() -> None:
     at = _run_page()
 

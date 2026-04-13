@@ -138,7 +138,7 @@ streamlit run scripts/web_ui.py
   - 默认启用代理模式，也可在侧边栏关闭
   - 在主页概览中同时查看四个工作入口
   - 选择主报表模块
-  - 在页面内填写 Gainer 所需日期与黄金价格
+  - 在页面内按 `YYYY-MM-DD` 填写 Gainer 日期，并参考 LBMA Gold Price 页面中的 `USD PM` 填写黄金价格
   - 在页面内指定整体表输入、输出、日志路径
   - 在当前标签页内保留运行结果，不再因工作区切换出现空白页
   - 触发 main / codex 输出校验

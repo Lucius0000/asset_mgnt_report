@@ -9,8 +9,7 @@ APP_FILE = "scripts/web_ui.py"
 def _run_page(page: str | None = None) -> AppTest:
     at = AppTest.from_file(APP_FILE)
     if page is not None:
-        at.session_state["page"] = page
-        at.session_state["nav_page"] = page
+        at.session_state["active_workspace"] = page
     at.run()
     return at
 
@@ -25,6 +24,7 @@ def test_web_ui_home_renders_with_proxy_enabled() -> None:
     rendered_markdown = "\n".join(markdown.value for markdown in at.markdown)
     assert "主报表工作台" in rendered_markdown
     assert "Gainer 工作台" in rendered_markdown
+    assert any(button.label == "打开 主报表工作台" for button in at.button)
 
 
 def test_build_app_config_enables_proxy_by_default() -> None:

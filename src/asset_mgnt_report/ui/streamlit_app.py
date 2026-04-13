@@ -36,7 +36,7 @@ HOME_CARDS = [
     ("overall", "整体表工作台", "处理整体.xlsx 并输出整体_processed.xlsx。"),
     ("validation", "校验工作台", "对 main / codex 输出做回归对比，更新对比报告。"),
 ]
-PAGE_LABELS = {
+WORKSPACE_LABELS = {
     "home": "主页",
     "main": "主报表",
     "gainer": "Gainer",
@@ -254,6 +254,11 @@ def _inject_styles() -> None:
             color: var(--amr-ink) !important;
         }
 
+        [data-testid="stSidebar"] div[data-testid="stButton"] > button * {
+            color: var(--amr-ink) !important;
+            fill: var(--amr-ink) !important;
+        }
+
         [data-testid="stSidebar"] .stCaption {
             color: rgba(242, 238, 231, 0.82) !important;
         }
@@ -272,17 +277,24 @@ def _inject_styles() -> None:
             border-radius: 18px;
         }
 
-        button[data-baseweb="tab"] {
-            border-radius: 999px;
+        div[data-testid="stButton"][data-testkey^="workspace-"] > button,
+        div[data-testid="stButton"][data-testid="stButton"] button[kind="primary"] {
+            background: linear-gradient(180deg, var(--amr-accent), var(--amr-accent-strong));
+            color: #fff9ef !important;
         }
         </style>
         """,
         unsafe_allow_html=True,
     )
+def _normalize_workspace(workspace: str | None) -> str:
+    if workspace in {"home", "main", "gainer", "overall", "validation"}:
+        return workspace
+    return "home"
 
 
 def _ensure_state(config) -> None:
     defaults = {
+        "active_workspace": _normalize_workspace(os.getenv("AMR_ACTIVE_WORKSPACE")),
         "debug": config.debug,
         "use_proxy": config.use_proxy,
         "main_modules": [key for key, _ in MODULE_OPTIONS],
@@ -297,6 +309,10 @@ def _ensure_state(config) -> None:
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
+
+def _set_workspace(workspace: str) -> None:
+    workspace = _normalize_workspace(workspace)
+    st.session_state["active_workspace"] = workspace
 
 
 @contextmanager
@@ -427,10 +443,10 @@ def _render_result_panel() -> None:
 def _render_sidebar(config) -> None:
     with st.sidebar:
         st.markdown("### 控制台设置")
-        st.caption("主导航已移动到页面顶部标签栏。")
+        st.caption("工作台从主页卡片进入，当前页内展开。")
         st.checkbox("启用 debug", key="debug")
         st.checkbox("启用代理", key="use_proxy")
-        if st.button("清空运行结果", use_container_width=True):
+        if st.button("清空结果面板", key="clear-result-sidebar", use_container_width=True):
             st.session_state["result"] = None
 
         st.markdown("---")
@@ -442,15 +458,19 @@ def _render_sidebar(config) -> None:
 
 
 def _render_workspace_header(title: str, description: str) -> None:
-    st.markdown(
-        f"""
-        <div class="amr-workspace-copy">
-            <h2>{title}</h2>
-            <p>{description}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    left, right = st.columns([5, 1.25])
+    with left:
+        st.markdown(
+            f"""
+            <div class="amr-workspace-copy">
+                <h2>{title}</h2>
+                <p>{description}</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with right:
+        st.button("返回概览", key=f"back-{title}", use_container_width=True, on_click=_set_workspace, args=("home",))
 
 
 def _render_home() -> None:
@@ -473,6 +493,14 @@ def _render_home() -> None:
     for index, (page_key, title, desc) in enumerate(HOME_CARDS):
         with columns[index % 2]:
             st.markdown(f'<div class="amr-panel"><h3>{title}</h3><p>{desc}</p></div>', unsafe_allow_html=True)
+            st.button(
+                f"打开 {title}",
+                key=f"workspace-{page_key}",
+                use_container_width=True,
+                type="primary",
+                on_click=_set_workspace,
+                args=(page_key,),
+            )
 
     st.markdown('<div class="amr-section-label">当前默认行为</div>', unsafe_allow_html=True)
     st.markdown(
@@ -556,22 +584,16 @@ st.set_page_config(page_title="Asset Management Report", page_icon="📊", layou
 _inject_styles()
 _ensure_state(config)
 _render_sidebar(config)
+_render_home()
 
-home_tab, main_tab, gainer_tab, overall_tab, validation_tab = st.tabs(
-    [PAGE_LABELS["home"], PAGE_LABELS["main"], PAGE_LABELS["gainer"], PAGE_LABELS["overall"], PAGE_LABELS["validation"]]
-)
-
-with home_tab:
-    _render_home()
-
-with main_tab:
-    _render_main_page()
-
-with gainer_tab:
-    _render_gainer_page()
-
-with overall_tab:
-    _render_overall_page()
-
-with validation_tab:
-    _render_validation_page()
+active_workspace = st.session_state["active_workspace"]
+if active_workspace != "home":
+    st.markdown('<div class="amr-section-label">当前工作台</div>', unsafe_allow_html=True)
+    if active_workspace == "main":
+        _render_main_page()
+    elif active_workspace == "gainer":
+        _render_gainer_page()
+    elif active_workspace == "overall":
+        _render_overall_page()
+    elif active_workspace == "validation":
+        _render_validation_page()

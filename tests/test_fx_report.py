@@ -68,7 +68,8 @@ def test_yfinance_fallback_uses_proxy_and_marks_source(monkeypatch) -> None:
 
     def fake_download(*args, **kwargs):
         calls.append(kwargs.get("proxy"))
-        return pd.DataFrame({"Close": [7.21, 7.22]}, index=pd.to_datetime(["2026-04-10", "2026-04-11"]))
+        dates = pd.to_datetime(["2025-04-11", "2026-03-13", "2026-04-11"])
+        return pd.DataFrame({"Close": [7.01, 7.21, 7.22]}, index=dates)
 
     monkeypatch.setattr(fx_report.yf, "download", fake_download)
 
@@ -83,3 +84,57 @@ def test_yfinance_fallback_uses_proxy_and_marks_source(monkeypatch) -> None:
     assert calls == ["http://127.0.0.1:7890"]
     assert not result.empty
     assert result.attrs["data_source"] == "yfinance"
+
+
+def test_yfinance_fallback_uses_official_source_when_history_is_too_short(monkeypatch) -> None:
+    def fake_download(*args, **kwargs):
+        return pd.DataFrame({"Close": [7.22]}, index=pd.to_datetime(["2026-04-11"]))
+
+    fallback = pd.DataFrame(
+        {
+            "日期": pd.to_datetime(["2025-04-11", "2026-03-13", "2026-04-11"]),
+            "汇率": [7.02, 7.20, 7.22],
+        }
+    )
+    fallback.attrs["data_source"] = "currency_boc_safe"
+
+    monkeypatch.setattr(fx_report.yf, "download", fake_download)
+    monkeypatch.setattr(fx_report, "_get_fx_data_official", lambda symbol_code: fallback.copy())
+
+    result = fx_report._get_fx_data_yfinance("USDCNH")
+
+    assert result.attrs["data_source"] == "currency_boc_safe"
+    assert len(result) == 3
+
+
+def test_harmonize_pair_sources_prefers_common_fallback(monkeypatch) -> None:
+    usd_cnh = pd.DataFrame(
+        {
+            "日期": pd.to_datetime(["2025-04-11", "2026-03-13", "2026-04-11"]),
+            "汇率": [7.02, 7.20, 7.22],
+        }
+    )
+    usd_cnh.attrs["data_source"] = "yfinance"
+
+    usd_hkd = pd.DataFrame(
+        {
+            "日期": pd.to_datetime(["2025-04-11", "2026-03-13", "2026-04-11"]),
+            "汇率": [7.75, 7.82, 7.83],
+        }
+    )
+    usd_hkd.attrs["data_source"] = "currency_boc_safe"
+
+    safe_usd_cnh = usd_cnh.copy()
+    safe_usd_cnh.attrs["data_source"] = "currency_boc_safe"
+    safe_usd_hkd = usd_hkd.copy()
+    safe_usd_hkd.attrs["data_source"] = "currency_boc_safe"
+
+    monkeypatch.setattr(fx_report, "_get_fx_data_boc_safe", lambda symbol: safe_usd_cnh.copy() if symbol == "USDCNH" else safe_usd_hkd.copy())
+    monkeypatch.setattr(fx_report, "_get_fx_data_yfinance", lambda symbol: pd.DataFrame(columns=["日期", "汇率"]))
+    monkeypatch.setattr(fx_report, "_get_fx_data_boc_sina", lambda symbol: pd.DataFrame(columns=["日期", "汇率"]))
+    monkeypatch.setattr(fx_report, "_load_cached_fx_data", lambda symbol: pd.DataFrame(columns=["日期", "汇率"]))
+
+    result = fx_report._harmonize_pair_sources({"USD_CNH": usd_cnh, "USD_HKD": usd_hkd})
+
+    assert result["USD_CNH"].attrs["data_source"] == "currency_boc_safe"
+    assert result["USD_HKD"].attrs["data_source"] == "currency_boc_safe"

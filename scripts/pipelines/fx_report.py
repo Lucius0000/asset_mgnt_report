@@ -88,6 +88,68 @@ def _mark_source(df: pd.DataFrame, source: str) -> pd.DataFrame:
     return df
 
 
+def _has_reference_point(df: pd.DataFrame, target_date: pd.Timestamp, tolerance_days: int = 10) -> bool:
+    if df.empty:
+        return False
+    window = df[
+        (df["日期"] >= target_date - pd.Timedelta(days=tolerance_days))
+        & (df["日期"] <= target_date + pd.Timedelta(days=tolerance_days))
+    ]
+    return not window.empty
+
+
+def _has_metric_history(df: pd.DataFrame, *, tolerance_days: int = 10) -> bool:
+    if df is None or df.empty:
+        return False
+    cleaned = _clean_rate_df(df)
+    if cleaned.empty:
+        return False
+    latest = cleaned["日期"].max()
+    return _has_reference_point(cleaned, latest - pd.DateOffset(months=1), tolerance_days=tolerance_days) and _has_reference_point(
+        cleaned, latest - pd.DateOffset(years=1), tolerance_days=tolerance_days
+    )
+
+
+def _source_loader(source_name: str):
+    mapping = {
+        "forex_hist_em": get_fx_data,
+        "yfinance": _get_fx_data_yfinance,
+        "currency_boc_safe": _get_fx_data_boc_safe,
+        "currency_boc_sina": _get_fx_data_boc_sina,
+        "local_cache": _load_cached_fx_data,
+    }
+    return mapping[source_name]
+
+
+def _harmonize_pair_sources(fx_data: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    usd_cnh = fx_data["USD_CNH"]
+    usd_hkd = fx_data["USD_HKD"]
+    usd_cnh_source = usd_cnh.attrs.get("data_source", "unknown")
+    usd_hkd_source = usd_hkd.attrs.get("data_source", "unknown")
+
+    if usd_cnh_source == usd_hkd_source:
+        return fx_data
+
+    for source_name in ("currency_boc_safe", "yfinance", "currency_boc_sina", "local_cache"):
+        loader = _source_loader(source_name)
+        candidate_usd_cnh = loader("USDCNH")
+        candidate_usd_hkd = loader("USDHKD")
+        if _has_metric_history(candidate_usd_cnh) and _has_metric_history(candidate_usd_hkd):
+            logging.info(
+                "检测到 USD_CNH 与 USD_HKD 数据源不一致，已统一切换到 %s 以保证交叉汇率口径一致。",
+                source_name,
+            )
+            return {
+                "USD_CNH": candidate_usd_cnh,
+                "USD_HKD": candidate_usd_hkd,
+            }
+
+    logging.warning(
+        "USD_CNH 与 USD_HKD 数据源不一致，且未找到可用的统一回退源；继续保留当前结果。"
+    )
+    return fx_data
+
+
 def get_fx_data(symbol_code):
     try:
         df = ak.forex_hist_em(symbol=symbol_code)
@@ -153,6 +215,9 @@ def _get_fx_data_yfinance(symbol_code):
     cleaned = cleaned[["日期", "汇率"]].dropna()
     if cleaned.empty:
         logging.warning(f"{symbol_code} 的 Yahoo Finance 备用数据在清洗后为空。")
+        return _get_fx_data_official(symbol_code)
+    if not _has_metric_history(cleaned):
+        logging.warning(f"{symbol_code} 的 Yahoo Finance 备用数据历史长度不足，继续尝试官方降级源。")
         return _get_fx_data_official(symbol_code)
     logging.info(f"{symbol_code} 已切换到 Yahoo Finance 备用数据源。")
     return _mark_source(cleaned, "yfinance")
@@ -272,7 +337,9 @@ def compute_cross_rate(base_df, quote_df):
     result = df[['日期', '汇率']]
     base_source = base_df.attrs.get("data_source", "unknown")
     quote_source = quote_df.attrs.get("data_source", "unknown")
-    return _mark_source(result, f"derived:{quote_source}/{base_source}")
+    if base_source == quote_source:
+        return _mark_source(result, f"derived:{quote_source}")
+    return _mark_source(result, f"derived:USD_HKD={quote_source};USD_CNH={base_source}")
 
 def save_raw_data(data_dict):
     for name, df in data_dict.items():
@@ -385,6 +452,7 @@ def main(debug = False):
     fx_data = {}
     for name, code in SYMBOLS.items():
         fx_data[name] = get_fx_data(code)
+    fx_data = _harmonize_pair_sources(fx_data)
     fx_data['CNH_HKD'] = compute_cross_rate(fx_data['USD_CNH'], fx_data['USD_HKD'])
 
     # 保存数据

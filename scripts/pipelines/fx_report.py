@@ -68,11 +68,31 @@ def _looks_like_proxy_failure(exc: Exception) -> bool:
     return any(keyword in message for keyword in keywords)
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _current_proxy() -> str | None:
+    for key in ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"):
+        value = os.environ.get(key)
+        if value:
+            return value
+    return None
+
+
+def _mark_source(df: pd.DataFrame, source: str) -> pd.DataFrame:
+    df.attrs["data_source"] = source
+    return df
+
+
 def get_fx_data(symbol_code):
     try:
         df = ak.forex_hist_em(symbol=symbol_code)
     except Exception as e:
-        if _looks_like_proxy_failure(e):
+        if _looks_like_proxy_failure(e) and _env_bool("AMR_FX_RETRY_WITHOUT_PROXY", True):
             logging.warning(f"拉取 {symbol_code} 历史数据遇到代理错误，尝试直连重试: {e}")
             try:
                 with _without_proxy_env():
@@ -87,36 +107,37 @@ def get_fx_data(symbol_code):
     required_columns = {'日期', '最新价'}
     if df is None or df.empty or not required_columns.issubset(df.columns):
         logging.warning(f"{symbol_code} 未返回可用汇率数据。")
-        return pd.DataFrame(columns=['日期', '汇率'])
+        return _get_fx_data_yfinance(symbol_code)
 
     df['日期'] = pd.to_datetime(df['日期'], errors='coerce')
     df = df[['日期', '最新价']].rename(columns={'最新价': '汇率'}).dropna()
     if df.empty:
         logging.warning(f"{symbol_code} 历史数据在清洗后为空。")
         return _get_fx_data_yfinance(symbol_code)
-    return df
+    return _mark_source(df, "forex_hist_em")
 
 
 def _get_fx_data_yfinance(symbol_code):
     ticker = YAHOO_SYMBOLS.get(symbol_code)
     if not ticker:
-        return pd.DataFrame(columns=['日期', '汇率'])
+        return _get_fx_data_official(symbol_code)
     try:
-        with _without_proxy_env():
-            df = yf.download(
-                ticker,
-                period="10y",
-                interval="1d",
-                progress=False,
-                auto_adjust=False,
-                threads=False,
-            )
+        proxy = _current_proxy()
+        df = yf.download(
+            ticker,
+            period="10y",
+            interval="1d",
+            progress=False,
+            auto_adjust=False,
+            threads=False,
+            proxy=proxy,
+        )
     except Exception as exc:
         logging.error(f"拉取 {symbol_code} 的 Yahoo Finance 备用数据失败: {exc}")
-        return pd.DataFrame(columns=['日期', '汇率'])
+        return _get_fx_data_official(symbol_code)
     if df is None or df.empty:
         logging.warning(f"{symbol_code} 的 Yahoo Finance 备用数据为空。")
-        return pd.DataFrame(columns=['日期', '汇率'])
+        return _get_fx_data_official(symbol_code)
     close_series = df["Close"]
     if isinstance(close_series, pd.DataFrame):
         close_series = close_series.iloc[:, 0]
@@ -132,9 +153,91 @@ def _get_fx_data_yfinance(symbol_code):
     cleaned = cleaned[["日期", "汇率"]].dropna()
     if cleaned.empty:
         logging.warning(f"{symbol_code} 的 Yahoo Finance 备用数据在清洗后为空。")
-        return _load_cached_fx_data(symbol_code)
+        return _get_fx_data_official(symbol_code)
     logging.info(f"{symbol_code} 已切换到 Yahoo Finance 备用数据源。")
-    return cleaned
+    return _mark_source(cleaned, "yfinance")
+
+
+def _get_fx_data_official(symbol_code):
+    safe_df = _get_fx_data_boc_safe(symbol_code)
+    if not safe_df.empty:
+        return safe_df
+    sina_df = _get_fx_data_boc_sina(symbol_code)
+    if not sina_df.empty:
+        return sina_df
+    return _load_cached_fx_data(symbol_code)
+
+
+def _clean_rate_df(df: pd.DataFrame) -> pd.DataFrame:
+    cleaned = df.copy()
+    cleaned["日期"] = pd.to_datetime(cleaned["日期"], errors="coerce")
+    cleaned["汇率"] = pd.to_numeric(cleaned["汇率"], errors="coerce")
+    return cleaned[["日期", "汇率"]].dropna()
+
+
+def _get_fx_data_boc_safe(symbol_code):
+    try:
+        df = ak.currency_boc_safe()
+    except Exception as exc:
+        logging.error(f"拉取 {symbol_code} 的 currency_boc_safe 数据失败: {exc}")
+        return pd.DataFrame(columns=["日期", "汇率"])
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["日期", "汇率"])
+    if symbol_code == "USDCNH" and "美元" in df.columns:
+        cleaned = _clean_rate_df(df[["日期", "美元"]].rename(columns={"美元": "汇率"}))
+        cleaned["汇率"] = cleaned["汇率"] / 100.0
+        if not cleaned.empty:
+            logging.info(f"{symbol_code} 已切换到官方降级源 currency_boc_safe。")
+            return _mark_source(cleaned, "currency_boc_safe")
+    if symbol_code == "USDHKD" and {"美元", "港元"}.issubset(df.columns):
+        merged = _clean_rate_df(df[["日期", "美元"]].rename(columns={"美元": "汇率"})).rename(columns={"汇率": "美元"})
+        hkd = _clean_rate_df(df[["日期", "港元"]].rename(columns={"港元": "汇率"})).rename(columns={"汇率": "港元"})
+        merged = pd.merge(merged, hkd, on="日期", how="inner")
+        if not merged.empty:
+            result = merged.assign(汇率=merged["美元"] / merged["港元"])[["日期", "汇率"]]
+            logging.info(f"{symbol_code} 已切换到官方降级源 currency_boc_safe。")
+            return _mark_source(result, "currency_boc_safe")
+    return pd.DataFrame(columns=["日期", "汇率"])
+
+
+def _pick_boc_sina_value_column(df: pd.DataFrame) -> str | None:
+    for column in ("央行中间价", "中行钞卖价/汇卖价", "中行汇买价"):
+        if column in df.columns:
+            return column
+    return None
+
+
+def _load_boc_sina_series(symbol_name: str) -> pd.DataFrame:
+    start_date = (datetime.now() - pd.DateOffset(years=5)).strftime("%Y%m%d")
+    end_date = datetime.now().strftime("%Y%m%d")
+    df = ak.currency_boc_sina(symbol=symbol_name, start_date=start_date, end_date=end_date)
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["日期", "汇率"])
+    value_column = _pick_boc_sina_value_column(df)
+    if value_column is None:
+        return pd.DataFrame(columns=["日期", "汇率"])
+    return _clean_rate_df(df[["日期", value_column]].rename(columns={value_column: "汇率"}))
+
+
+def _get_fx_data_boc_sina(symbol_code):
+    try:
+        if symbol_code == "USDCNH":
+            usd = _load_boc_sina_series("美元")
+            if not usd.empty:
+                usd["汇率"] = usd["汇率"] / 100.0
+                logging.info(f"{symbol_code} 已切换到官方降级源 currency_boc_sina。")
+                return _mark_source(usd, "currency_boc_sina")
+        if symbol_code == "USDHKD":
+            usd = _load_boc_sina_series("美元").rename(columns={"汇率": "美元"})
+            hkd = _load_boc_sina_series("港币").rename(columns={"汇率": "港元"})
+            merged = pd.merge(usd, hkd, on="日期", how="inner")
+            if not merged.empty:
+                result = merged.assign(汇率=merged["美元"] / merged["港元"])[["日期", "汇率"]]
+                logging.info(f"{symbol_code} 已切换到官方降级源 currency_boc_sina。")
+                return _mark_source(result, "currency_boc_sina")
+    except Exception as exc:
+        logging.error(f"拉取 {symbol_code} 的 currency_boc_sina 数据失败: {exc}")
+    return pd.DataFrame(columns=["日期", "汇率"])
 
 
 def _load_cached_fx_data(symbol_code):
@@ -158,7 +261,7 @@ def _load_cached_fx_data(symbol_code):
         logging.warning(f"{symbol_code} 的本地缓存清洗后为空。")
         return pd.DataFrame(columns=['日期', '汇率'])
     logging.info(f"{symbol_code} 已切换到本地缓存数据源: {cache_path}")
-    return cached
+    return _mark_source(cached, "local_cache")
 
 def compute_cross_rate(base_df, quote_df):
     if base_df.empty or quote_df.empty:
@@ -166,11 +269,18 @@ def compute_cross_rate(base_df, quote_df):
         return pd.DataFrame(columns=['日期', '汇率'])
     df = pd.merge(base_df, quote_df, on='日期', suffixes=('_base', '_quote'))
     df['汇率'] = df['汇率_quote'] / df['汇率_base']
-    return df[['日期', '汇率']]
+    result = df[['日期', '汇率']]
+    base_source = base_df.attrs.get("data_source", "unknown")
+    quote_source = quote_df.attrs.get("data_source", "unknown")
+    return _mark_source(result, f"derived:{quote_source}/{base_source}")
 
 def save_raw_data(data_dict):
     for name, df in data_dict.items():
-        df.to_excel(f"{RAW_DATA_DIR}/{name}.xlsx", index=False)
+        path = Path(RAW_DATA_DIR) / f"{name}.xlsx"
+        if df.empty and path.exists():
+            logging.warning(f"{name} 本次为空，保留已有缓存文件: {path}")
+            continue
+        df.to_excel(path, index=False)
 
 def calculate_metrics(data_dict):
     results = []
@@ -220,6 +330,7 @@ def calculate_metrics(data_dict):
 
             results.append({
                 '货币汇率': name,
+                '数据源': df.attrs.get("data_source", "unknown"),
                 '汇率值': now_val,
                 '日期': now.strftime('%Y-%m-%d'),
                 'MoM(%)': mom,
@@ -234,6 +345,7 @@ def calculate_metrics(data_dict):
                 logging.error(f"{name} 指标计算失败: {e}")
             results.append({
                 '货币汇率': name,
+                '数据源': df.attrs.get("data_source", "unavailable"),
                 '汇率值': np.nan,
                 '日期': None,
                 'MoM(%)': np.nan,

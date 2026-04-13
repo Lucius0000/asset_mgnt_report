@@ -138,7 +138,8 @@ streamlit run scripts/web_ui.py
   - 默认启用代理模式，也可在侧边栏关闭
   - 在主页概览中同时查看四个工作入口
   - 选择主报表模块
-  - 在页面内按 `YYYY-MM-DD` 填写 Gainer 日期，并参考 LBMA Gold Price 页面中的 `USD PM` 填写黄金价格
+  - 在页面内通过日历选择 Gainer 的 `本周末日期（周六）` 和 `两周前日期（周六）`
+  - 参考 LBMA Gold Price 页面中的 `USD PM` 填写黄金价格
   - 在页面内指定整体表输入、输出、日志路径
   - 在当前标签页内保留运行结果，不再因工作区切换出现空白页
   - 触发 main / codex 输出校验
@@ -230,6 +231,16 @@ docker compose run --rm amr-cli python -m scripts.validation.validate_outputs
   - `US = 0.045`
   - `CN = 0.017`
   - `HK = 0.0062`
+
+#### 1.1 汇率数据源策略
+
+- 汇率模块主源仍为 AkShare 的 `forex_hist_em`
+- 若 Eastmoney 抓取失败，会按顺序降级到：
+  - `yfinance`
+  - AkShare 官方人民币历史接口：`currency_boc_safe`
+  - AkShare 官方人民币历史接口：`currency_boc_sina`
+  - 本地缓存
+- `fx_metrics.xlsx` 会写出 `数据源` 字段，标记本次汇率指标来自主源、备用源、官方降级源或缓存
 
 #### 2. CPI
 

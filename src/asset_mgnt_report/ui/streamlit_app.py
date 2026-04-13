@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from copy import deepcopy
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 import io
 import os
 from pathlib import Path
@@ -318,17 +318,22 @@ def _default_overall_paths(config) -> dict[str, str]:
     }
 
 
+def _current_week_saturday(reference: date | None = None) -> date:
+    today = reference or date.today()
+    return today + timedelta(days=5 - today.weekday())
+
+
 def _ensure_state(config) -> None:
     overall_defaults = _default_overall_paths(config)
-    default_current_date = date.today()
-    default_previous_date = date.today() - timedelta(days=13)
+    default_current_date = _current_week_saturday()
+    default_previous_date = default_current_date - timedelta(days=14)
     defaults = {
         "active_workspace": _normalize_workspace(os.getenv("AMR_ACTIVE_WORKSPACE")),
         "debug": config.debug,
         "use_proxy": config.use_proxy,
         "main_modules": [key for key, _ in MODULE_OPTIONS],
-        "gainer_current_date_text": default_current_date.strftime("%Y-%m-%d"),
-        "gainer_previous_date_text": default_previous_date.strftime("%Y-%m-%d"),
+        "gainer_current_date": default_current_date,
+        "gainer_previous_date": default_previous_date,
         "gainer_current_gold_price": "",
         "gainer_previous_gold_price": "",
         **overall_defaults,
@@ -349,29 +354,17 @@ def _restore_overall_paths(config) -> None:
         st.session_state[key] = _sanitize_text_path(st.session_state.get(key), default)
 
 
-def _sanitize_date_text(value: object, fallback: date) -> str:
-    if isinstance(value, datetime):
-        return value.strftime("%Y-%m-%d")
-    if isinstance(value, date):
-        return value.strftime("%Y-%m-%d")
-    text = str(value or "").strip()
-    if not text:
-        return fallback.strftime("%Y-%m-%d")
-    try:
-        return datetime.strptime(text, "%Y-%m-%d").strftime("%Y-%m-%d")
-    except ValueError:
-        return text
-
-
 def _restore_gainer_inputs() -> None:
-    st.session_state["gainer_current_date_text"] = _sanitize_date_text(
-        st.session_state.get("gainer_current_date_text"),
-        date.today(),
-    )
-    st.session_state["gainer_previous_date_text"] = _sanitize_date_text(
-        st.session_state.get("gainer_previous_date_text"),
-        date.today() - timedelta(days=13),
-    )
+    default_current_date = _current_week_saturday()
+    default_previous_date = default_current_date - timedelta(days=14)
+    current_date = st.session_state.get("gainer_current_date", default_current_date)
+    previous_date = st.session_state.get("gainer_previous_date", default_previous_date)
+    if not isinstance(current_date, date):
+        current_date = default_current_date
+    if not isinstance(previous_date, date):
+        previous_date = default_previous_date
+    st.session_state["gainer_current_date"] = current_date
+    st.session_state["gainer_previous_date"] = previous_date
     st.session_state["gainer_current_gold_price"] = str(
         st.session_state.get("gainer_current_gold_price", "")
     ).strip()
@@ -380,28 +373,27 @@ def _restore_gainer_inputs() -> None:
     ).strip()
 
 
-def _parse_gainer_date(field_key: str, label: str) -> datetime | None:
-    raw = str(st.session_state.get(field_key, "")).strip()
-    if not raw:
+def _validate_gainer_date(field_key: str, label: str) -> date | None:
+    value = st.session_state.get(field_key)
+    if not isinstance(value, date):
         st.session_state["result"] = {
             "label": "Gainer",
             "status": "error",
             "duration": 0.0,
-            "output": f"{label} 不能为空，请按 YYYY-MM-DD 填写。",
+            "output": f"{label} 读取失败，请重新从日历中选择一个周六日期。",
             "traceback": "",
         }
         return None
-    try:
-        return datetime.strptime(raw, "%Y-%m-%d")
-    except ValueError:
+    if value.weekday() != 5:
         st.session_state["result"] = {
             "label": "Gainer",
             "status": "error",
             "duration": 0.0,
-            "output": f"{label} 格式无效，请使用 YYYY-MM-DD，例如 2026-04-11。",
+            "output": f"{label} 必须选择周六，请重新从日历中选择周六日期。",
             "traceback": "",
         }
         return None
+    return value
 
 
 def _parse_gainer_price(field_key: str, label: str) -> float | None:
@@ -735,11 +727,20 @@ def _run_main_action() -> None:
 
 
 def _run_gainer_action() -> None:
-    current_date = _parse_gainer_date("gainer_current_date_text", "本周末日期")
-    previous_date = _parse_gainer_date("gainer_previous_date_text", "两周前日期")
+    current_date = _validate_gainer_date("gainer_current_date", "本周末日期（周六）")
+    previous_date = _validate_gainer_date("gainer_previous_date", "两周前日期（周六）")
     current_gold = _parse_gainer_price("gainer_current_gold_price", "本周末黄金价格")
     previous_gold = _parse_gainer_price("gainer_previous_gold_price", "两周前黄金价格")
     if None in {current_date, previous_date, current_gold, previous_gold}:
+        return
+    if (current_date - previous_date).days != 14:
+        st.session_state["result"] = {
+            "label": "Gainer",
+            "status": "error",
+            "duration": 0.0,
+            "output": "两周前日期需要与本周末日期相差 14 天，并且两者都必须是周六。",
+            "traceback": "",
+        }
         return
 
     debug = bool(st.session_state["debug"])
@@ -1046,7 +1047,7 @@ def _render_main_page() -> None:
 
 def _render_gainer_page() -> None:
     _restore_gainer_inputs()
-    _render_workspace_header("Gainer 工作台", "填写日期和金价后即可运行，页面会显示步骤进度与日志。")
+    _render_workspace_header("Gainer 工作台", "请选择两个周六日期并填写金价，页面会显示步骤进度与日志。")
     st.markdown(
         """
         <div class="amr-inline-note">
@@ -1057,17 +1058,15 @@ def _render_gainer_page() -> None:
         unsafe_allow_html=True,
     )
     col1, col2 = st.columns(2)
-    col1.text_input(
-        "本周末日期",
-        key="gainer_current_date_text",
-        placeholder="例如 2026-04-11",
-        help="请使用 YYYY-MM-DD 格式。",
+    col1.date_input(
+        "本周末日期（周六）",
+        key="gainer_current_date",
+        help="请选择本周对应的周六日期。",
     )
-    col2.text_input(
-        "两周前日期",
-        key="gainer_previous_date_text",
-        placeholder="例如 2026-03-29",
-        help="请使用 YYYY-MM-DD 格式。",
+    col2.date_input(
+        "两周前日期（周六）",
+        key="gainer_previous_date",
+        help="请选择与本周末日期相差 14 天的周六日期。",
     )
     col3, col4 = st.columns(2)
     col3.text_input("本周末黄金价格（USD/oz）", key="gainer_current_gold_price", placeholder="例如 2378.42")

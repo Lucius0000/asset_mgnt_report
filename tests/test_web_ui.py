@@ -40,18 +40,32 @@ def test_home_button_navigates_to_main_workspace() -> None:
     assert at.multiselect[0].label == "主报表模块"
 
 
-def test_gainer_page_uses_text_inputs_and_shows_lbma_hint() -> None:
+def test_gainer_page_uses_calendar_inputs_and_shows_lbma_hint() -> None:
     at = _run_page("gainer")
 
     assert not at.exception
-    labels = [widget.label for widget in at.text_input]
-    assert "本周末日期" in labels
-    assert "两周前日期" in labels
-    assert "本周末黄金价格（USD/oz）" in labels
-    assert "两周前黄金价格（USD/oz）" in labels
+    date_labels = [widget.label for widget in at.date_input]
+    assert "本周末日期（周六）" in date_labels
+    assert "两周前日期（周六）" in date_labels
+    text_labels = [widget.label for widget in at.text_input]
+    assert "本周末黄金价格（USD/oz）" in text_labels
+    assert "两周前黄金价格（USD/oz）" in text_labels
     rendered_markdown = "\n".join(markdown.value for markdown in at.markdown)
     assert "LBMA Gold Price" in rendered_markdown
     assert "USD PM" in rendered_markdown
+
+
+def test_gainer_rejects_non_saturday_dates() -> None:
+    at = _run_page("gainer")
+
+    next(widget for widget in at.date_input if widget.label == "本周末日期（周六）").set_value("2026-04-17")
+    next(widget for widget in at.date_input if widget.label == "两周前日期（周六）").set_value("2026-04-03")
+    next(widget for widget in at.text_input if widget.label == "本周末黄金价格（USD/oz）").set_value("2378.42")
+    next(widget for widget in at.text_input if widget.label == "两周前黄金价格（USD/oz）").set_value("2314.15")
+    next(button for button in at.button if button.label == "执行 Gainer").click().run()
+
+    assert not at.exception
+    assert "必须选择周六" in at.session_state["result"]["output"]
 
 
 def test_clear_result_keeps_home_visible() -> None:

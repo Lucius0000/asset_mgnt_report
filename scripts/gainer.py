@@ -54,6 +54,11 @@ def _prompt_date(message: str, default: Optional[datetime] = None) -> datetime:
             print(f"日期格式无效，请使用 YYYY-MM-DD{suffix}")
 
 
+def _ensure_saturday(date_value: datetime, label: str) -> None:
+    if date_value.weekday() != 5:
+        raise ValueError(f"{label} 必须是周六，当前为 {date_value:%Y-%m-%d}。")
+
+
 def _format_billion(value: Optional[float], unit: str, decimals: int = 2) -> str:
     if value is None:
         return "N/A"
@@ -203,14 +208,21 @@ def _compute_gold_caps(previous_price: float, current_price: float) -> Tuple[flo
 
 
 def main(progress_callback=None, cancel_check=None) -> None:
-    today = datetime.today()
-    default_current = today.replace(hour=0, minute=0, second=0, microsecond=0)
-    current_date = _prompt_date(f"请输入本周末日期（YYYY-MM-DD），周六最佳，回车默认 {default_current:%Y-%m-%d}:", default=default_current)
-    default_previous = current_date - timedelta(days=13)
+    today = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
+    default_current = today + timedelta(days=5 - today.weekday())
+    current_date = _prompt_date(
+        f"请输入本周末日期（YYYY-MM-DD，周六），回车默认 {default_current:%Y-%m-%d}:",
+        default=default_current,
+    )
+    _ensure_saturday(current_date, "本周末日期")
+    default_previous = current_date - timedelta(days=14)
     previous_date = _prompt_date(
-        f"请输入两周前周末日期（YYYY-MM-DD，回车默认 {default_previous:%Y-%m-%d}）：",
+        f"请输入两周前周末日期（YYYY-MM-DD，周六，回车默认 {default_previous:%Y-%m-%d}）：",
         default=default_previous,
     )
+    _ensure_saturday(previous_date, "两周前日期")
+    if (current_date - previous_date).days != 14:
+        raise ValueError("两周前日期需要与本周末日期相差 14 天，且两者都必须是周六。")
 
     print("\n请提供 LBMA Gold Price PM（USD/oz）")
     print("src: https://www.lbma.org.uk/cn/prices-and-data#/")

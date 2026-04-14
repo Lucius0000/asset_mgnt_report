@@ -319,8 +319,7 @@ def _default_overall_paths(config) -> dict[str, str]:
 
 
 def _current_week_saturday(reference: date | None = None) -> date:
-    today = reference or date.today()
-    return today + timedelta(days=5 - today.weekday())
+    return gainer_entry.default_current_saturday(reference).date()
 
 
 def _ensure_state(config) -> None:

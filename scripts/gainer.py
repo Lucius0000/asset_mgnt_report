@@ -7,8 +7,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
+import os
 import sys
 from typing import Dict, List, Optional, Tuple
 
@@ -34,15 +35,48 @@ CONFIG = {
 }
 
 
+def _coerce_date_like(value: object) -> datetime:
+    if isinstance(value, datetime):
+        return value.replace(hour=0, minute=0, second=0, microsecond=0)
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time())
+    if isinstance(value, str):
+        return datetime.strptime(value.strip(), "%Y-%m-%d")
+    raise TypeError(f"无法识别的日期类型: {type(value)!r}")
+
+
+def default_current_saturday(reference: date | datetime | None = None) -> datetime:
+    ref = reference or datetime.today()
+    if isinstance(ref, datetime):
+        base = ref.date()
+    else:
+        base = ref
+
+    # 周一到周四默认回到上周六；周五到周日默认指向本周六。
+    if base.weekday() < 4:
+        target = base - timedelta(days=base.weekday() + 2)
+    else:
+        target = base + timedelta(days=5 - base.weekday())
+    return datetime.combine(target, datetime.min.time())
+
+
+def default_gainer_dates(reference: date | datetime | None = None) -> tuple[datetime, datetime]:
+    current = default_current_saturday(reference)
+    previous = current - timedelta(days=14)
+    return current, previous
+
+
 def _prompt_date(message: str, default: Optional[datetime] = None) -> datetime:
+    config_key = "current_date" if "本周末" in message else "previous_date"
+    env_key = "AMR_GAINER_CURRENT_DATE" if "本周末" in message else "AMR_GAINER_PREVIOUS_DATE"
     configured = resolve_config_value(
-        explicit=CONFIG["current_date"] if "本周末" in message else CONFIG["previous_date"],
-        env_key="AMR_GAINER_CURRENT_DATE" if "本周末" in message else "AMR_GAINER_PREVIOUS_DATE",
-        default=default,
-        caster=lambda raw: datetime.strptime(raw, "%Y-%m-%d"),
+        explicit=CONFIG[config_key],
+        env_key=env_key,
+        default=None,
+        caster=lambda raw: raw,
     )
     if configured is not None:
-        return configured
+        return _coerce_date_like(configured)
     while True:
         raw = input(message).strip()
         if not raw and default is not None:
@@ -208,14 +242,15 @@ def _compute_gold_caps(previous_price: float, current_price: float) -> Tuple[flo
 
 
 def main(progress_callback=None, cancel_check=None) -> None:
-    today = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
-    default_current = today + timedelta(days=5 - today.weekday())
+    default_current, default_previous = default_gainer_dates()
     current_date = _prompt_date(
         f"请输入本周末日期（YYYY-MM-DD，周六），回车默认 {default_current:%Y-%m-%d}:",
         default=default_current,
     )
     _ensure_saturday(current_date, "本周末日期")
-    default_previous = current_date - timedelta(days=14)
+    explicit_previous = CONFIG["previous_date"] is not None or os.getenv("AMR_GAINER_PREVIOUS_DATE")
+    if not explicit_previous:
+        default_previous = current_date - timedelta(days=14)
     previous_date = _prompt_date(
         f"请输入两周前周末日期（YYYY-MM-DD，周六，回车默认 {default_previous:%Y-%m-%d}）：",
         default=default_previous,

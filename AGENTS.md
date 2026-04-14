@@ -45,3 +45,4 @@
 - 每次业务修改同步更新 `docs/版本迭代日志.md`
 - 所有新指标逻辑必须附带至少一个测试或验证脚本
 - 合并前运行 `pytest`
+- 如果修改了 `scripts/main.py`、`scripts/gainer.py` 或其依赖的数据读取脚本，不能只做语法检查或 mock 测试；至少要从 `scripts/` 目录做一次真实启动验证，确认不会把 `data/`、`output/` 误解析到 `scripts/data/`、`scripts/output/`。

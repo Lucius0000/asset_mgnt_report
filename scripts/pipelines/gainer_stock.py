@@ -27,6 +27,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
 import warnings
 warnings.filterwarnings("ignore")
+from pathlib import Path
 
 import io
 import pandas as pd
@@ -42,18 +43,20 @@ import yfinance as yf
 import akshare as ak
 from src.asset_mgnt_report.services.progress import emit_progress, ensure_not_cancelled
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 # 如需代理，请保留；否则可注释掉
 os.environ['http_proxy'] = 'http://127.0.0.1:7890'
 os.environ['https_proxy'] = 'http://127.0.0.1:7890'
 
 # 目录
-DATA_DIR = "data/seeds"
-RAW_DIR = os.path.join("output", "raw_data")
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(RAW_DIR, exist_ok=True)
+DATA_DIR = PROJECT_ROOT / "data" / "seeds"
+RAW_DIR = PROJECT_ROOT / "output" / "raw_data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+RAW_DIR.mkdir(parents=True, exist_ok=True)
 
 # 日志
-LOG_PATH = os.path.join(RAW_DIR, "index_freefloat_cap.log")
+LOG_PATH = RAW_DIR / "index_freefloat_cap.log"
 logger = logging.getLogger("index_cap")
 logger.setLevel(logging.INFO)
 fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
@@ -177,11 +180,11 @@ def get_sp500_symbols() -> List[str]:
     then convert to yfinance tickers (BRK.B -> BRK-B)
     """
     url = "https://datahub.io/core/s-and-p-500-companies/r/constituents.csv"
-    local = os.path.join(DATA_DIR, "constituents.csv")
+    local = DATA_DIR / "constituents.csv"
     try:
         r = requests.get(url, timeout=10)
         r.raise_for_status()
-        with open(local, "w", encoding="utf-8") as f:
+        with local.open("w", encoding="utf-8") as f:
             f.write(r.text)
         df = pd.read_csv(io.StringIO(r.text))
     except Exception:
@@ -223,9 +226,9 @@ def get_hsi_symbols_from_excel() -> List[str]:
     Read latest AASTOCKS_Export*.xlsx from data/ and map to yfinance .HK tickers.
     Both dates use the same file as per requirement.
     """
-    files = glob.glob(os.path.join(DATA_DIR, "AASTOCKS_Export*.xlsx"))
+    files = glob.glob(str(DATA_DIR / "AASTOCKS_Export*.xlsx"))
     if not files:
-        raise FileNotFoundError("未找到匹配的 data/AASTOCKS_Export*.xlsx，请先下载恒指成分股Excel。")
+        raise FileNotFoundError(f"未找到匹配的 {DATA_DIR}\\AASTOCKS_Export*.xlsx，请先下载恒指成分股Excel。")
     file_path = max(files, key=os.path.getmtime)
     df = pd.read_excel(file_path)
 
@@ -246,8 +249,8 @@ def get_hs300_symbols() -> List[str]:
     保证成份券代码保持完整，保留前导零。
     """
     # 读取本地表格
-    file_path = os.path.join(DATA_DIR, "000300cons.xls")
-    if not os.path.exists(file_path):
+    file_path = DATA_DIR / "000300cons.xls"
+    if not file_path.exists():
         raise FileNotFoundError(f"未找到文件 {file_path}，请检查文件路径。")
     
     df = pd.read_excel(file_path, dtype={"成份券代码Constituent Code": str})
@@ -452,13 +455,13 @@ def compute_index_caps(
     # -------- 输出清单（缺失 & 明细）--------
     if rows_map:
         details_df = pd.DataFrame(list(rows_map.values()))
-        out_details = os.path.join(RAW_DIR, f"per_ticker_details_{name}_{date_old}_vs_{date_new}.csv")
+        out_details = RAW_DIR / f"per_ticker_details_{name}_{date_old}_vs_{date_new}.csv"
         details_df.to_csv(out_details, index=False, encoding="utf-8-sig")
         logger.info(f"{name}: 个股明细（收盘价/股本/市值）已保存：{out_details}（{len(details_df)} 行）")
 
     if missing:
         rows = [{"ticker": k, **v} for k, v in sorted(missing.items())]
-        out_csv = os.path.join(RAW_DIR, f"missing_{name}_{date_old}_vs_{date_new}.csv")
+        out_csv = RAW_DIR / f"missing_{name}_{date_old}_vs_{date_new}.csv"
         pd.DataFrame(rows).to_csv(out_csv, index=False, encoding="utf-8-sig")
         logger.info(f"{name}: 未获取到价格/股本的股票清单已保存：{out_csv}（{len(rows)} 只）")
 
@@ -541,8 +544,8 @@ def main():
         }
     }
 
-    out_json = os.path.join(RAW_DIR, f"index_freefloat_caps_{DATE_OLD}_vs_{DATE_NEW}.json")
-    with open(out_json, "w", encoding="utf-8") as f:
+    out_json = RAW_DIR / f"index_freefloat_caps_{DATE_OLD}_vs_{DATE_NEW}.json"
+    with out_json.open("w", encoding="utf-8") as f:
         json.dump(Gainer, f, ensure_ascii=False, indent=2)
 
     logger.info(f"结果已保存：{out_json}")

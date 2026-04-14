@@ -6,13 +6,18 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 import os
+import sys
 
 import akshare as ak
 import pandas as pd
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from src.asset_mgnt_report.config.inputs import resolve_config_value
 
-DATA_DIR = Path("data") / "seeds"
+DATA_DIR = PROJECT_ROOT / "data" / "seeds"
 
 CONFIG = {
     "target_date": None,
@@ -93,7 +98,7 @@ class UsbondsResult:
 def _load_us_treasury_values() -> UsbondsResult:
     files = sorted(DATA_DIR.glob("MSPD_SumSecty*.csv"))
     if not files:
-        raise RuntimeError("data 目录下未找到 MSPD_SumSecty 开头的 CSV 文件。")
+        raise RuntimeError(f"未找到 {DATA_DIR}\\MSPD_SumSecty*.csv。")
     csv_path = max(files, key=lambda p: p.stat().st_mtime)
     df = pd.read_csv(csv_path)
     if df.empty:

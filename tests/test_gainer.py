@@ -4,6 +4,7 @@ from datetime import date, datetime
 import pandas as pd
 
 from scripts import gainer
+from scripts.pipelines import gainer_bond, gainer_stock
 
 
 def test_default_current_saturday_uses_previous_saturday_before_friday() -> None:
@@ -119,3 +120,10 @@ def test_gainer_main_skips_gold_prompt_when_gold_module_not_selected(monkeypatch
     finally:
         gainer.CONFIG.clear()
         gainer.CONFIG.update(original_config)
+
+
+def test_gainer_related_paths_are_project_root_relative() -> None:
+    assert gainer.OUTPUT_PATH == gainer.PROJECT_ROOT / "output" / "Gainer.xlsx"
+    assert gainer_bond.DATA_DIR == gainer.PROJECT_ROOT / "data" / "seeds"
+    assert gainer_stock.DATA_DIR == gainer.PROJECT_ROOT / "data" / "seeds"
+    assert gainer_stock.RAW_DIR == gainer.PROJECT_ROOT / "output" / "raw_data"

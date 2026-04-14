@@ -24,7 +24,7 @@ from src.asset_mgnt_report.config.defaults import build_app_config
 from src.asset_mgnt_report.config.inputs import resolve_config_value
 from src.asset_mgnt_report.services.progress import emit_progress, ensure_not_cancelled
 
-OUTPUT_PATH = Path("output") / "Gainer.xlsx"
+OUTPUT_PATH = PROJECT_ROOT / "output" / "Gainer.xlsx"
 APP_CONFIG = build_app_config()
 
 GAINER_MODULE_OPTIONS: tuple[tuple[str, str], ...] = (
@@ -172,7 +172,7 @@ def _to_billions(value: Optional[float]) -> Optional[float]:
 def _load_us_treasury_series() -> pd.DataFrame:
     files = sorted(gainer_bond.DATA_DIR.glob("MSPD_SumSecty*.csv"))
     if not files:
-        raise FileNotFoundError("未找到 data/MSPD_SumSecty*.csv，请先更新美国国债数据。")
+        raise FileNotFoundError(f"未找到 {gainer_bond.DATA_DIR}\\MSPD_SumSecty*.csv，请先更新美国国债数据。")
     csv_path = max(files, key=lambda p: p.stat().st_mtime)
     df = pd.read_csv(csv_path)
     if df.empty:
@@ -497,6 +497,8 @@ def main(
 
     df = pd.DataFrame(rows, columns=["区域", "资产大类", "Market Cap Last 2 week", "Market Cap This week", "Gainer"])
     target_output = Path(output_path or CONFIG["output_path"] or OUTPUT_PATH)
+    if not target_output.is_absolute():
+        target_output = PROJECT_ROOT / target_output
     target_output.parent.mkdir(parents=True, exist_ok=True)
     df.to_excel(target_output, index=False)
     print(f"\n整合结果已保存至：{target_output}")

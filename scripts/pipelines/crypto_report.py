@@ -23,6 +23,7 @@ import yfinance as yf
 from matplotlib.colors import TwoSlopeNorm
 from datetime import datetime
 
+from src.asset_mgnt_report.config.defaults import build_app_config
 from src.asset_mgnt_report.metrics.annualization import annualized_return_from_returns
 from src.asset_mgnt_report.metrics.returns import relative_change, trailing_percentile
 from src.asset_mgnt_report.metrics.sharpe import sharpe_ratio as shared_sharpe_ratio
@@ -32,7 +33,8 @@ from src.asset_mgnt_report.metrics.volatility import annualized_volatility
 # 在这里指定结束日期（如 "2025-08-11"），None 表示用今天
 END_DATE_STR = None
 
-OUTPUT_DIR = "output"
+APP_CONFIG = build_app_config()
+OUTPUT_DIR = str(APP_CONFIG.output_dir)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # 代理（如本机未运行代理可临时注释）

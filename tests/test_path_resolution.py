@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from scripts import overall
-from scripts.pipelines import fx_report, stock_cap_report, stock_index_report
+from scripts.pipelines import crypto_report, fx_report, stock_cap_report, stock_index_report
 
 
 def test_overall_paths_resolve_to_project_root() -> None:
@@ -24,3 +24,4 @@ def test_main_pipeline_outputs_resolve_to_project_root() -> None:
     assert stock_index_report.APP_CONFIG.raw_output_dir == stock_index_report.PROJECT_ROOT / "output" / "raw_data"
     assert fx_report.RAW_DATA_DIR == fx_report.APP_CONFIG.raw_output_dir
     assert isinstance(fx_report.RAW_DATA_DIR, Path)
+    assert Path(crypto_report.OUTPUT_DIR) == crypto_report.APP_CONFIG.output_dir

@@ -152,6 +152,64 @@ def _yf_market_caps_bulk(
     return pd.DataFrame(records)
 
 
+def _retry_problem_market_caps(
+    caps_df: pd.DataFrame,
+    *,
+    progress_callback=None,
+    cancel_check=None,
+    retry_desc: str = "Retry",
+) -> pd.DataFrame:
+    """
+    对首轮抓取中 method=fail 或 method=calc 的标的做二次重试：
+    - fail：优先尝试补齐缺失值
+    - calc：再给一次机会拿到 get_info 里的官方 marketCap，拿不到则保留 calc
+    """
+    if caps_df.empty or "method" not in caps_df.columns:
+        return caps_df
+
+    retry_df = caps_df[caps_df["method"].isin(["fail", "calc"])].copy()
+    if retry_df.empty:
+        return caps_df
+
+    total = len(retry_df)
+    emit_progress(progress_callback, "subtask_start", subtask=retry_desc, progress_label=f"{retry_desc} 0/{total}", progress_ratio=0.0)
+
+    updates: dict[str, tuple[float | None, str]] = {}
+    for index, row in enumerate(retry_df.itertuples(index=False), start=1):
+        ensure_not_cancelled(cancel_check)
+        symbol = getattr(row, "代码")
+        original_method = getattr(row, "method")
+        market_cap = getattr(row, "market_cap")
+        try:
+            retried_cap, retried_method = _retry(_yf_fetch_market_cap_with_method, symbol, max_retries=4, base_delay=2.0)
+        except Exception:
+            retried_cap, retried_method = market_cap, original_method
+
+        if original_method == "fail" and retried_method == "fail":
+            retried_cap = market_cap
+        if original_method == "calc" and retried_method == "fail":
+            retried_cap, retried_method = market_cap, original_method
+
+        updates[symbol] = (retried_cap, retried_method)
+        emit_progress(
+            progress_callback,
+            "subtask_progress",
+            subtask=retry_desc,
+            progress_label=f"{retry_desc} {index}/{total}",
+            progress_ratio=index / total if total else 1.0,
+        )
+
+    refreshed = caps_df.copy()
+    for idx, row in refreshed.iterrows():
+        symbol = row["代码"]
+        if symbol in updates:
+            refreshed.at[idx, "market_cap"] = updates[symbol][0]
+            refreshed.at[idx, "method"] = updates[symbol][1]
+
+    emit_progress(progress_callback, "subtask_complete", subtask=retry_desc, progress_label=f"{retry_desc} 完成", progress_ratio=1.0)
+    return refreshed
+
+
 def get_hs300_cap(progress_callback=None, cancel_check=None):
     """
     获取沪深300总市值（将 hs300 与实时行情按 6 位证券代码合并）
@@ -198,6 +256,12 @@ def get_hs300_cap(progress_callback=None, cancel_check=None):
         desc="HS300",
         progress_callback=progress_callback,
         cancel_check=cancel_check,
+    )
+    caps_df = _retry_problem_market_caps(
+        caps_df,
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
+        retry_desc="HS300 重试",
     )
     merged = pd.merge(
         hs300_df,
@@ -275,6 +339,12 @@ def get_hsi_cap(progress_callback=None, cancel_check=None):
         desc="HSI",
         progress_callback=progress_callback,
         cancel_check=cancel_check,
+    )
+    caps_df = _retry_problem_market_caps(
+        caps_df,
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
+        retry_desc="HSI 重试",
     )
     # yfinance 的结果列显式命名为 市值_yf，避免与原表冲突
     caps_df.rename(columns={"代码": "yf_code", "market_cap": "市值_yf"}, inplace=True)
@@ -388,6 +458,12 @@ def get_spy_cap(debug = False, progress_callback=None, cancel_check=None):
         desc="S&P 500",
         progress_callback=progress_callback,
         cancel_check=cancel_check,
+    )
+    caps_df = _retry_problem_market_caps(
+        caps_df,
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
+        retry_desc="S&P 500 重试",
     )
     caps_df.rename(columns={"market_cap": "MKT_CAP_PARSED"}, inplace=True)
     # 写盘原始

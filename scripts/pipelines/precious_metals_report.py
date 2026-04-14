@@ -322,6 +322,7 @@ wb = Workbook()
 ws = wb.active
 ws.title = "Commodities"
 
+ws.append(["当前时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
 ws.append(header_top)
 ws.append(header_bottom)
 
@@ -341,8 +342,8 @@ merge_config = {
 }
 
 for (col_start, col_end), (col, row_span) in merge_config.items():
-    cell = ws.cell(row=1, column=col_start)
-    ws.merge_cells(start_row=1, start_column=col_start, end_row=1 + row_span - 1, end_column=col_end)
+    cell = ws.cell(row=2, column=col_start)
+    ws.merge_cells(start_row=2, start_column=col_start, end_row=2 + row_span - 1, end_column=col_end)
     cell.alignment = Alignment(horizontal='center', vertical='center')
 
 for row in data_rows:

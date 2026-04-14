@@ -338,35 +338,38 @@ def export_to_excel_template(df: pd.DataFrame, filename: str = "crypto_metrics_t
         ws = wb.active
         ws.title = "Sheet1"
 
+        ws["A1"] = "当前时间"
+        ws["B1"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         # 列标题: C.. = 币种
-        ws["A1"] = "指标"; ws.merge_cells("A1:B1")
-        ws["A2"] = "总市值 (B $)"; ws.merge_cells("A2:B2")
-        ws["A3"] = "收盘价"; ws.merge_cells("A3:B3")
-        ws["A4"] = "交易量（B $)"; ws.merge_cells("A4:B4")
-        ws["A5"] = "环比 MoM(%)"; ws.merge_cells("A5:B5")
-        ws["A6"] = "同比 YoY(%)"; ws.merge_cells("A6:B6")
-        ws["A7"] = "百分位(1Y, %)"; ws.merge_cells("A7:B7")
-        ws["A8"] = "两周变动(%)"; ws.merge_cells("A8:B8")
+        ws["A2"] = "指标"; ws.merge_cells("A2:B2")
+        ws["A3"] = "总市值 (B $)"; ws.merge_cells("A3:B3")
+        ws["A4"] = "收盘价"; ws.merge_cells("A4:B4")
+        ws["A5"] = "交易量（B $)"; ws.merge_cells("A5:B5")
+        ws["A6"] = "环比 MoM(%)"; ws.merge_cells("A6:B6")
+        ws["A7"] = "同比 YoY(%)"; ws.merge_cells("A7:B7")
+        ws["A8"] = "百分位(1Y, %)"; ws.merge_cells("A8:B8")
+        ws["A9"] = "两周变动(%)"; ws.merge_cells("A9:B9")
 
-        ws["A9"]  = "波动率(%)"; ws.merge_cells("A9:A11")
-        ws["B9"]  = "短期（月）"
-        ws["B10"] = "中期（季度）"
-        ws["B11"] = "长期（年）"
+        ws["A10"] = "波动率(%)"; ws.merge_cells("A10:A12")
+        ws["B10"] = "短期（月）"
+        ws["B11"] = "中期（季度）"
+        ws["B12"] = "长期（年）"
 
-        ws["A12"] = "Sharp Ratio"; ws.merge_cells("A12:A14")
-        ws["B12"] = "短期（月）"
-        ws["B13"] = "中期（季度）"
-        ws["B14"] = "长期（年）"
+        ws["A13"] = "Sharp Ratio"; ws.merge_cells("A13:A15")
+        ws["B13"] = "短期（月）"
+        ws["B14"] = "中期（季度）"
+        ws["B15"] = "长期（年）"
 
-        ws["A15"] = "收益率年化(%)"; ws.merge_cells("A15:A17")
-        ws["B15"] = "短期（月）"
-        ws["B16"] = "中期（季度）"
-        ws["B17"] = "长期（年）"
+        ws["A16"] = "收益率年化(%)"; ws.merge_cells("A16:A18")
+        ws["B16"] = "短期（月）"
+        ws["B17"] = "中期（季度）"
+        ws["B18"] = "长期（年）"
 
         # 币种列头
         start_col = 3  # C列
         for i, s in enumerate(syms):
-            ws.cell(row=1, column=start_col + i, value=s)
+            ws.cell(row=2, column=start_col + i, value=s)
 
         # 写入工具
         def write_row_values(row_idx, series, integer_thousands=False):
@@ -376,32 +379,32 @@ def export_to_excel_template(df: pd.DataFrame, filename: str = "crypto_metrics_t
                 cell.number_format = '#,##0' if integer_thousands else '#,##0.00'
 
         # A2~A8
-        write_row_values(2,  mcap_map, integer_thousands=True)   # 总市值(B$)
-        write_row_values(3,  price_map)                          # 收盘价
-        write_row_values(4,  wv_map, integer_thousands=True)     # 交易量(B$)
-        write_row_values(5,  mom_map)                            # MoM %
-        write_row_values(6,  yoy_map)                            # YoY %
-        write_row_values(7,  pct1y_map)                          # 百分位(1Y)
-        write_row_values(8,  chg2w_map)                          # 两周变动 %
+        write_row_values(3,  mcap_map, integer_thousands=True)   # 总市值(B$)
+        write_row_values(4,  price_map)                          # 收盘价
+        write_row_values(5,  wv_map, integer_thousands=True)     # 交易量(B$)
+        write_row_values(6,  mom_map)                            # MoM %
+        write_row_values(7,  yoy_map)                            # YoY %
+        write_row_values(8,  pct1y_map)                          # 百分位(1Y)
+        write_row_values(9,  chg2w_map)                          # 两周变动 %
 
         # 波动率
-        write_row_values(9,  mvol)
-        write_row_values(10, qvol)
-        write_row_values(11, yvol)
+        write_row_values(10, mvol)
+        write_row_values(11, qvol)
+        write_row_values(12, yvol)
 
         # Sharpe
-        write_row_values(12, msp)
-        write_row_values(13, qsp)
-        write_row_values(14, ysp)
+        write_row_values(13, msp)
+        write_row_values(14, qsp)
+        write_row_values(15, ysp)
 
         # 收益率年化
-        write_row_values(15, mret)
-        write_row_values(16, qret)
-        write_row_values(17, yret)
+        write_row_values(16, mret)
+        write_row_values(17, qret)
+        write_row_values(18, yret)
 
         # 对齐与列宽
         for col in range(1, start_col + len(syms)):
-            for row in range(1, 18):
+            for row in range(1, 19):
                 ws.cell(row=row, column=col).alignment = Alignment(horizontal="center", vertical="center")
         ws.column_dimensions["A"].width = 14
         ws.column_dimensions["B"].width = 14

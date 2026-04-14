@@ -1,547 +1,534 @@
-'''
-CPI分析，输出CPI表：cpi_metrics.xlsx
-输出各国 CPI YOY 走势图：cpi_trends.png
-另有两幅图表，暂不输出
-'''
+"""
+CPI 分析，输出：
+- output/cpi_metrics.xlsx
+- output/cpi_trends.png
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import sys
+from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
 
 import akshare as ak
-import pandas as pd
-import numpy as np
-from datetime import datetime
-import logging
-import os
-import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-import glob
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import requests
 
-# 设置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from src.asset_mgnt_report.config.defaults import build_app_config
+
+
+APP_CONFIG = build_app_config()
+OUTPUT_DIR = APP_CONFIG.output_dir
+RAW_DATA_DIR = APP_CONFIG.raw_output_dir
+SEED_DATA_DIR = APP_CONFIG.seed_data_dir
+
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-def load_hk_composite_cpi(file_path):
-    """
-    读取香港综合消费物价指数（按年变动百分率）数据，清洗 φ 和 [φ3] 等字符
-    :param file_path: str, Excel 路径
-    :return: pd.DataFrame(columns=['日期', 'YoY', 'MoM'])
-    """
+FRED_SERIES = {
+    "US_CPI": ("CPIAUCSL", "美国", "CPI", "fred"),
+    "US_PCE": ("PCEPILFE", "美国", "核心 PCE", "fred"),
+}
+CHINA_OFFICIAL_SOURCE = "china_nbs"
+CHINA_FALLBACK_SOURCE = "china_akshare_macro_china_cpi"
+CHINA_CACHE_SOURCE = "china_cache"
+HK_API_SOURCE = "hk_censtatd_api"
+HK_LOCAL_SOURCE = "hk_local_seed_fallback"
+US_FALLBACK_SOURCE = "akshare_macro"
+
+
+def _normalize_month_timestamp(value: Any) -> pd.Timestamp:
+    if isinstance(value, pd.Timestamp):
+        return value.normalize().replace(day=1)
+    text = str(value).strip()
+    if not text:
+        return pd.NaT
+    if "年" in text and "月" in text:
+        year = text.split("年")[0]
+        month = text.split("年")[1].split("月")[0].zfill(2)
+        return pd.Timestamp(f"{year}-{month}-01")
+    if len(text) == 6 and text.isdigit():
+        return pd.Timestamp(f"{text[:4]}-{text[4:6]}-01")
+    ts = pd.to_datetime(text, errors="coerce")
+    if pd.isna(ts):
+        return pd.NaT
+    return ts.normalize().replace(day=1)
+
+
+def _clean_numeric(series: pd.Series) -> pd.Series:
+    return pd.to_numeric(
+        series.astype(str).str.replace(r"\[.*?\]", "", regex=True).str.replace("φ", "").str.replace("+", ""),
+        errors="coerce",
+    )
+
+
+def _empty_standard_frame() -> pd.DataFrame:
+    return pd.DataFrame(columns=["日期", "指数", "YoY", "MoM", "数据源"])
+
+
+def _standardize_frame(df: pd.DataFrame, source: str) -> pd.DataFrame:
+    out = df.copy()
+    out["日期"] = pd.to_datetime(out["日期"], errors="coerce")
+    out["指数"] = pd.to_numeric(out["指数"], errors="coerce")
+    out["YoY"] = pd.to_numeric(out["YoY"], errors="coerce")
+    out["MoM"] = pd.to_numeric(out["MoM"], errors="coerce")
+    out["数据源"] = source
+    out = out.dropna(subset=["日期"]).sort_values("日期").drop_duplicates(subset=["日期"], keep="last")
+    return out.reset_index(drop=True)
+
+
+def _build_metrics_frame_from_index(index_df: pd.DataFrame, source: str) -> pd.DataFrame:
+    out = index_df[["日期", "指数"]].copy()
+    out["日期"] = pd.to_datetime(out["日期"], errors="coerce")
+    out["指数"] = pd.to_numeric(out["指数"], errors="coerce")
+    out = out.dropna(subset=["日期", "指数"]).sort_values("日期")
+    out["MoM"] = out["指数"].pct_change(1) * 100
+    out["YoY"] = out["指数"].pct_change(12) * 100
+    out["数据源"] = source
+    return out.reset_index(drop=True)
+
+
+def _save_raw_frame(name: str, df: pd.DataFrame) -> None:
+    if df is None or df.empty:
+        return
+    df.to_excel(RAW_DATA_DIR / name, index=False)
+
+
+def _compute_index_cagr(series_df: pd.DataFrame, years: int = 10) -> tuple[float | None, str | None]:
+    valid = series_df.dropna(subset=["日期", "指数"]).sort_values("日期")
+    if len(valid) < 2:
+        return None, None
+    latest = valid.iloc[-1]
+    start_target = latest["日期"] - pd.DateOffset(years=years)
+    candidates = valid[valid["日期"] >= start_target]
+    start_row = candidates.iloc[0] if not candidates.empty else valid.iloc[0]
+    if start_row["日期"] >= latest["日期"] or start_row["指数"] <= 0 or latest["指数"] <= 0:
+        return None, None
+    year_span = (latest["日期"] - start_row["日期"]).days / 365.25
+    if year_span <= 0:
+        return None, None
+    cagr = ((latest["指数"] / start_row["指数"]) ** (1 / year_span) - 1) * 100
+    date_range = f"{start_row['日期'].strftime('%Y-%m')} to {latest['日期'].strftime('%Y-%m')}"
+    return float(cagr), date_range
+
+
+def _format_metric_date(dt: Any) -> str:
+    if pd.isna(dt):
+        return "-"
+    return pd.to_datetime(dt).strftime("%Y-%m")
+
+
+def _fetch_fred_series(series_id: str) -> pd.DataFrame:
+    if not APP_CONFIG.fred_api_key:
+        raise RuntimeError("缺少 FRED_API_KEY，无法请求 FRED 官方 CPI/PCE 数据。")
+    response = requests.get(
+        "https://api.stlouisfed.org/fred/series/observations",
+        params={
+            "series_id": series_id,
+            "api_key": APP_CONFIG.fred_api_key,
+            "file_type": "json",
+            "sort_order": "asc",
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    observations = payload.get("observations", [])
+    frame = pd.DataFrame(observations)
+    if frame.empty:
+        raise ValueError(f"FRED 序列 {series_id} 返回空数据。")
+    frame["日期"] = pd.to_datetime(frame["date"], errors="coerce")
+    frame["指数"] = pd.to_numeric(frame["value"], errors="coerce")
+    return frame[["日期", "指数"]].dropna(subset=["日期", "指数"])
+
+
+def _fetch_us_series_with_fred(series_id: str, source_name: str) -> pd.DataFrame:
+    fred_df = _fetch_fred_series(series_id)
+    standardized = _build_metrics_frame_from_index(fred_df, source_name)
+    if standardized.empty:
+        raise ValueError(f"FRED 序列 {series_id} 标准化后为空。")
+    return standardized
+
+
+def _fallback_us_cpi() -> pd.DataFrame:
+    monthly = ak.macro_usa_cpi_monthly()[["日期", "今值"]].copy()
+    monthly["日期"] = pd.to_datetime(monthly["日期"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+    monthly["MoM"] = pd.to_numeric(monthly["今值"], errors="coerce")
+    yearly = ak.macro_usa_cpi_yoy()[["时间", "现值"]].copy()
+    yearly["日期"] = pd.to_datetime(yearly["时间"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+    yearly["YoY"] = pd.to_numeric(yearly["现值"], errors="coerce")
+    merged = monthly[["日期", "MoM"]].merge(yearly[["日期", "YoY"]], on="日期", how="outer").sort_values("日期")
+    merged["指数"] = np.nan
+    merged["数据源"] = US_FALLBACK_SOURCE
+    return merged[["日期", "指数", "YoY", "MoM", "数据源"]].dropna(subset=["日期"]).reset_index(drop=True)
+
+
+def _fallback_us_pce() -> pd.DataFrame:
+    pce = ak.macro_usa_core_pce_price()[["日期", "今值"]].copy()
+    pce["日期"] = pd.to_datetime(pce["日期"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+    pce["YoY"] = pd.to_numeric(pce["今值"], errors="coerce")
+    pce["MoM"] = np.nan
+    pce["指数"] = np.nan
+    pce["数据源"] = US_FALLBACK_SOURCE
+    return pce[["日期", "指数", "YoY", "MoM", "数据源"]].dropna(subset=["日期"]).reset_index(drop=True)
+
+
+@lru_cache(maxsize=1)
+def _discover_nbs_indicator_codes() -> dict[str, str]:
+    from akshare.economic import macro_china_nbs
+
+    codes: dict[str, str] = {}
+    dbcode = "hgyd"
+    queue: list[tuple[str, int]] = [("zb", 0)]
+    visited: set[str] = set()
+    while queue:
+        node_id, depth = queue.pop(0)
+        if node_id in visited or depth > 6:
+            continue
+        visited.add(node_id)
+        nodes = macro_china_nbs._get_nbs_tree(node_id, dbcode)  # type: ignore[attr-defined]
+        for node in nodes:
+            name = str(node.get("name") or node.get("cname") or "")
+            child_id = str(node.get("id") or "")
+            if not child_id:
+                continue
+            lowered = name.replace(" ", "")
+            if "居民消费价格指数" in lowered and "上年同月=100" in lowered and "yoy" not in codes:
+                codes["yoy"] = child_id
+            if "居民消费价格指数" in lowered and "上月=100" in lowered and "mom" not in codes:
+                codes["mom"] = child_id
+            is_parent = str(node.get("isParent", "")).lower() in {"true", "1"} or node.get("isParent") is True
+            if is_parent:
+                queue.append((child_id, depth + 1))
+        if "yoy" in codes and "mom" in codes:
+            break
+    return codes
+
+
+def _query_nbs_indicator(indicator_id: str, period: str = "LAST180") -> pd.DataFrame:
+    response = requests.get(
+        "https://data.stats.gov.cn/easyquery.htm",
+        params={
+            "m": "QueryData",
+            "dbcode": "hgyd",
+            "rowcode": "zb",
+            "colcode": "sj",
+            "wds": "[]",
+            "dfwds": json.dumps(
+                [
+                    {"wdcode": "zb", "valuecode": indicator_id},
+                    {"wdcode": "sj", "valuecode": period},
+                ],
+                ensure_ascii=False,
+            ),
+            "k1": str(int(datetime.now().timestamp() * 1000)),
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    datanodes = payload["returndata"]["datanodes"]
+    wdnodes = payload["returndata"]["wdnodes"]
+    period_nodes = next(node["nodes"] for node in wdnodes if node["wdcode"] == "sj")
+    period_map = {node["code"]: node["cname"] for node in period_nodes}
+    records = []
+    for item in datanodes:
+        data_info = item.get("data", {})
+        if not data_info.get("hasdata"):
+            continue
+        code = item["wds"][1]["valuecode"]
+        records.append({"日期": _normalize_month_timestamp(period_map.get(code, code)), "值": data_info.get("data")})
+    frame = pd.DataFrame(records)
+    frame["值"] = pd.to_numeric(frame["值"], errors="coerce")
+    return frame.dropna(subset=["日期"]).sort_values("日期")
+
+
+def _fetch_china_cpi_from_nbs_official() -> pd.DataFrame:
+    codes = _discover_nbs_indicator_codes()
+    if "yoy" not in codes or "mom" not in codes:
+        raise RuntimeError("未能从国家统计局目录树中解析中国 CPI 所需指标编码。")
+    yoy_df = _query_nbs_indicator(codes["yoy"]).rename(columns={"值": "YoYIndex"})
+    mom_df = _query_nbs_indicator(codes["mom"]).rename(columns={"值": "MoMIndex"})
+    merged = yoy_df.merge(mom_df, on="日期", how="outer").sort_values("日期")
+    merged["YoY"] = merged["YoYIndex"] - 100
+    merged["MoM"] = merged["MoMIndex"] - 100
+    merged["指数"] = np.nan
+    merged["数据源"] = CHINA_OFFICIAL_SOURCE
+    standardized = merged[["日期", "指数", "YoY", "MoM", "数据源"]].dropna(subset=["日期"]).reset_index(drop=True)
+    if standardized.empty:
+        raise RuntimeError("国家统计局官方链路返回空数据。")
+    return standardized
+
+
+def _fetch_china_cpi_from_akshare() -> pd.DataFrame:
+    frame = ak.macro_china_cpi().copy()
+    standardized = frame.rename(
+        columns={
+            "月份": "日期",
+            "全国-当月": "指数",
+            "全国-同比增长": "YoY",
+            "全国-环比增长": "MoM",
+        }
+    )
+    standardized["日期"] = standardized["日期"].apply(_normalize_month_timestamp)
+    standardized["指数"] = pd.to_numeric(standardized["指数"], errors="coerce")
+    standardized["YoY"] = pd.to_numeric(standardized["YoY"], errors="coerce")
+    standardized["MoM"] = pd.to_numeric(standardized["MoM"], errors="coerce")
+    standardized["数据源"] = CHINA_FALLBACK_SOURCE
+    standardized = standardized[["日期", "指数", "YoY", "MoM", "数据源"]]
+    return standardized.dropna(subset=["日期"]).sort_values("日期").reset_index(drop=True)
+
+
+def _load_cached_cpi_frame(cache_path: Path, source_name: str) -> pd.DataFrame:
+    if not cache_path.exists():
+        raise FileNotFoundError(f"未找到本地缓存：{cache_path}")
+    frame = pd.read_excel(cache_path)
+    standardized = _standardize_frame(frame, source_name)
+    if standardized.empty:
+        raise ValueError(f"本地缓存为空：{cache_path}")
+    return standardized
+
+
+def load_hk_composite_cpi(file_path: Path) -> pd.DataFrame:
     df = pd.read_excel(file_path, sheet_name=0, header=None, skiprows=5)
-
-    df = df.rename(columns={
-        0: "年",
-        1: "月",
-        2: "指数",
-        3: "YoY",
-        4: "MoM"
-    })
-
-    # 补全年份空值
-    df["年"] = df["年"].fillna(method="ffill")
-
-    # 只保留同时有“月”和“YoY”的行（排除年平均或空行）
+    df = df.rename(columns={0: "年", 1: "月", 2: "指数", 3: "YoY", 4: "MoM"})
+    df["年"] = df["年"].ffill()
     df = df[df["月"].notna() & df["YoY"].notna()]
-
-    # 将“月”列转为两位数字符串
     df["月"] = df["月"].astype(int).astype(str).str.zfill(2)
     df["年"] = df["年"].astype(int).astype(str)
-
-    # 构造“日期”
     df["日期"] = pd.to_datetime(df["年"] + df["月"], format="%Y%m")
-
-    # 清洗 YoY 和 MoM 中的“φ”和“[φ3]”等特殊字符，保留数值
-    df["YoY"] = df["YoY"].astype(str).str.replace(r"\[.*?\]", "", regex=True).str.replace("φ", "")
-    df["MoM"] = df["MoM"].astype(str).str.replace(r"\[.*?\]", "", regex=True).str.replace("φ", "")
-
-    df["YoY"] = pd.to_numeric(df["YoY"], errors="coerce")
-    df["MoM"] = pd.to_numeric(df["MoM"], errors="coerce")
-
-    return df[["日期", "YoY", "MoM"]].dropna()
+    df["指数"] = _clean_numeric(df["指数"])
+    df["YoY"] = _clean_numeric(df["YoY"])
+    df["MoM"] = _clean_numeric(df["MoM"])
+    df["数据源"] = HK_LOCAL_SOURCE
+    return df[["日期", "指数", "YoY", "MoM", "数据源"]].dropna(subset=["日期"]).reset_index(drop=True)
 
 
-
-def get_cpi_data(time_range=10):
-    """
-    获取美国、中国、香港的CPI数据
-    返回: 包含各国CPI数据的字典
-    """
-    try:
-        # 美国CPI数据
-        us_cpi_monthly = ak.macro_usa_cpi_monthly()
-        us_cpi_yearly = ak.macro_usa_cpi_yoy()
-        # 美国PCE数据
-        us_pce_yearly = ak.macro_usa_core_pce_price()
-        # 中国CPI数据
-        cn_cpi_monthly = ak.macro_china_cpi_monthly()
-        cn_cpi_yearly = ak.macro_china_cpi_yearly()
-        # 香港CPI数据
-        # hk_cpi_monthly = none # not available
-        files = glob.glob(os.path.join("data", "seeds", "Table 510*.xlsx"))
-        if not files:
-            raise FileNotFoundError("未找到匹配的 Table 510*.xlsx 文件")
-        latest_file = max(files, key=os.path.getmtime)
-        hk_cpi_yearly = load_hk_composite_cpi(latest_file)
-
-        return {
-            'US_monthly': us_cpi_monthly.tail(time_range),
-            'US_yearly': us_cpi_yearly.tail(time_range),
-            'US_pce_yearly': us_pce_yearly.tail(time_range),
-            'CN_monthly': cn_cpi_monthly.tail(time_range),
-            'CN_yearly': cn_cpi_yearly.tail(time_range),
-            'HK_yearly': hk_cpi_yearly.tail(time_range)
-        }   
-    
-    except Exception as e:
-        logger.error(f"获取CPI数据时出错: {str(e)}")
-        return None
-    
-def calculate_cpi_metrics(cpi_data, debug=False):
-    """
-    计算CPI指标：MoM, YoY, 10年复合增长率
-    处理月度数据和年度数据
-    
-    Args:
-        cpi_data: Dictionary containing CPI data for different regions
-        debug: Boolean flag to enable debug messages
-    """
-    if not cpi_data:
-        if debug:
-            print("Error: No CPI data provided")
-        return None
-    
-    results = []
-    
-    # Process US data
-    if 'US_monthly' in cpi_data and 'US_yearly' in cpi_data:
-        if debug:
-            print("\n=== Processing US CPI data ===")
-        us_monthly = cpi_data['US_monthly']
-        us_yearly = cpi_data['US_yearly']
-        
-        # Get latest non-NaN values (most recent first)
-        latest_monthly = us_monthly[us_monthly['今值'].notna()].iloc[-1]
-        latest_yearly = us_yearly[us_yearly['现值'].notna()].iloc[-1]
-        
-        if debug:
-            print(f"Latest monthly: {latest_monthly['日期']} - {latest_monthly['今值']}%")
-            print(f"Latest yearly: {latest_yearly['时间']} - {latest_yearly['现值']}%")
-        
-        # Calculate 10-year CAGR
-        cagr_10y, date_range = calculate_cpi_10y_cagr(us_yearly, debug)
-        
-        results.append({
-            'region': 'US',
-            'mom_value': latest_monthly['今值'],
-            'mom_date': latest_monthly['日期'],
-            'yoy_value': latest_yearly['现值'],
-            'yoy_date': latest_yearly['时间'],
-            'cagr_10y': cagr_10y,
-            'date_range': date_range
-        })
-    
-    # Process US PCE data
-    if 'US_pce_yearly' in cpi_data:
-        if debug:
-            print("\n=== Processing US PCE data ===")
-        us_pce = cpi_data['US_pce_yearly']
-
-        # 确保数据按日期升序排列
-        us_pce = us_pce.sort_values('日期')
-
-        # 取最后两个月的今值计算MoM
-        valid_pce = us_pce[us_pce['今值'].notna()]
-        latest = valid_pce.iloc[-1]
-        prev = valid_pce.iloc[-2]
-
-        mom_value = latest['今值'] - prev['今值']  # 简单环比近似
-        mom_date = latest['日期']
-        yoy_value = latest['今值']
-        yoy_date = latest['日期']
-
-        if debug:
-            print(f"PCE MoM: {mom_value:.2f}% on {mom_date}")
-            print(f"PCE YoY: {yoy_value:.2f}% on {yoy_date}")
-
-        # 计算10年CAGR
-        cagr_10y, date_range = calculate_cpi_10y_cagr(us_pce, debug)
-
-        results.append({
-            'region': 'US_PCE',
-            'mom_value': mom_value,
-            'mom_date': mom_date,
-            'yoy_value': yoy_value,
-            'yoy_date': yoy_date,
-            'cagr_10y': cagr_10y,
-            'date_range': date_range
-        })
-
-    
-    # Process CN data
-    if 'CN_monthly' in cpi_data and 'CN_yearly' in cpi_data:
-        if debug:
-            print("\n=== Processing CN CPI data ===")
-        cn_monthly = cpi_data['CN_monthly']
-        cn_yearly = cpi_data['CN_yearly']
-        
-        # Get latest non-NaN values (most recent first)
-        latest_monthly = cn_monthly[cn_monthly['今值'].notna()].iloc[-1]
-        latest_yearly = cn_yearly[cn_yearly['今值'].notna()].iloc[-1]
-        
-        if debug:
-            print(f"Latest monthly: {latest_monthly['日期']} - {latest_monthly['今值']}%")
-            print(f"Latest yearly: {latest_yearly['日期']} - {latest_yearly['今值']}%")
-        
-        # Calculate 10-year CAGR
-        cagr_10y, date_range = calculate_cpi_10y_cagr(cn_yearly, debug)
-        
-        results.append({
-            'region': 'CN',
-            'mom_value': latest_monthly['今值'],
-            'mom_date': latest_monthly['日期'],
-            'yoy_value': latest_yearly['今值'],
-            'yoy_date': latest_yearly['日期'],
-            'cagr_10y': cagr_10y,
-            'date_range': date_range
-        })
-    
-    # Process HK data
-    if 'HK_yearly' in cpi_data:
-        if debug:
-            print("\n=== Processing HK CPI data ===")
-        hk_df = cpi_data['HK_yearly']
-        
-        latest = hk_df[hk_df['YoY'].notna()].iloc[-1]
-        prev = hk_df[hk_df['YoY'].notna()].iloc[-2]
-    
-        mom_value = latest['MoM']
-        mom_date = latest['日期']
-        yoy_value = latest['YoY']
-        yoy_date = latest['日期']
-    
-        if debug:
-            print(f"Latest HK MoM: {mom_value}% on {mom_date}")
-            print(f"Latest HK YoY: {yoy_value}% on {yoy_date}")
-    
-        cagr_10y, date_range = calculate_cpi_10y_cagr(
-            hk_df.rename(columns={"YoY": "今值"}), debug
+def _fetch_hk_cpi_from_api(period_start: str | None = None) -> pd.DataFrame:
+    if period_start is None:
+        period_start = (pd.Timestamp.today().normalize() - pd.DateOffset(years=12)).strftime("%Y%m")
+    parameters = {
+        "cv": {},
+        "sv": {"CC_CM_1920": ["Raw_1dp_idx_n", "MoM_1dp_%_s", "YoY_1dp_%_s"]},
+        "period": {"start": period_start},
+        "id": "510-60001",
+        "lang": "en",
+    }
+    response = requests.post(
+        "https://www.censtatd.gov.hk/api/post.php",
+        data={"query": json.dumps(parameters)},
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    status = payload.get("header", {}).get("status", {})
+    if status.get("code") != 0:
+        raise RuntimeError(f"香港统计处 API 失败: {status}")
+    records = []
+    for item in payload.get("dataSet", []):
+        if item.get("freq") != "M":
+            continue
+        sv_desc = str(item.get("svDesc", "")).strip()
+        records.append(
+            {
+                "日期": _normalize_month_timestamp(item.get("period")),
+                "字段": sv_desc,
+                "值": item.get("figure"),
+            }
         )
-    
-        results.append({
-            'region': 'HK',
-            'mom_value': mom_value,
-            'mom_date': mom_date,
-            'yoy_value': yoy_value,
-            'yoy_date': yoy_date,
-            'cagr_10y': cagr_10y,
-            'date_range': date_range
-        })
+    frame = pd.DataFrame(records)
+    if frame.empty:
+        raise RuntimeError("香港统计处 API 未返回月度 Composite CPI 数据。")
+    pivot = frame.pivot_table(index="日期", columns="字段", values="值", aggfunc="last").reset_index()
+    standardized = pivot.rename(
+        columns={
+            "Index": "指数",
+            "Month-to-month % change": "MoM",
+            "Year-on-year % change": "YoY",
+        }
+    )
+    standardized["数据源"] = HK_API_SOURCE
+    return _standardize_frame(standardized[["日期", "指数", "YoY", "MoM", "数据源"]], HK_API_SOURCE)
 
 
-    return pd.DataFrame(results)
-
-def calculate_cpi_10y_cagr(yearly_data, debug=False):
-    """
-    计算10年复合增长率
-    使用每年一个数据点（间隔12个月）来计算
-    从最新的有效数据开始, 取10个有效数据点
-    使用复利计算：(1+cpi_year1) * (1+cpi_year2) * ... * (1+cpi_year10) 的10次方根
-    
-    Args:
-        yearly_data: DataFrame containing yearly CPI data
-        debug: Boolean flag to enable debug messages
-    """
-    try:
-        if debug:
-            print("\n=== Starting 10-year CAGR calculation ===")
-            print(f"Input data shape: {yearly_data.shape}")
-            print(f"Columns: {yearly_data.columns.tolist()}")
-        
-        # Get the correct date column (时间 or 日期)
-        if '时间' in yearly_data.columns:
-            date_col = '时间'
-        else:
-            date_col = '日期'
-        
-        if debug:
-            print(f"Using date column: {date_col}")
-        
-        # Convert Chinese date format to YYYY-MM-DD if needed
-        def convert_date(date_str):
-            if isinstance(date_str, str) and '年' in date_str:
-                # Convert "2021年07月" to "2021-07-01"
-                year = date_str.split('年')[0]
-                month = date_str.split('年')[1].split('月')[0].zfill(2)
-                return f"{year}-{month}-01"
-            return date_str
-        
-        yearly_data[date_col] = yearly_data[date_col].apply(convert_date)
-        yearly_data[date_col] = pd.to_datetime(yearly_data[date_col])
-        
-        # Get value column name
-        if '现值' in yearly_data.columns:
-            value_col = '现值'
-        else:
-            value_col = '今值'
-            
-        if debug:
-            print(f"Using value column: {value_col}")
-        
-        # Sort data by date in descending order (newest first)
-        yearly_data = yearly_data.sort_values(date_col, ascending=False)
-        
-        if debug:
-            print("\nFirst few records after sorting:")
-            print(yearly_data.head())
-        
-        # Find the first valid (non-NaN) value
-        valid_data = yearly_data[yearly_data[value_col].notna()]
-        if len(valid_data) < 2:
-            if debug:
-                print("Error: Not enough valid data points found")
-            return None, None
-            
-        # Get the position of the first valid record
-        start_pos = yearly_data.index.get_loc(valid_data.index[0])
-        
-        if debug:
-            print(f"\nStarting from position {start_pos}")
-            print(f"First valid record: {yearly_data.iloc[start_pos]}")
-        
-        # Get 10 yearly records (approximately 12 months apart)
-        yearly_records = []
-        current_pos = start_pos
-        
-        for i in range(10):
-            if current_pos >= len(yearly_data):
-                if debug:
-                    print(f"Reached end of data at position {current_pos}")
-                break
-                
-            current_record = yearly_data.iloc[current_pos]
-            if pd.notna(current_record[value_col]):
-                yearly_records.append(current_record)
-                if debug:
-                    print(f"Year {i+1}: {current_record[date_col]} - {current_record[value_col]}%")
-            
-            # Move forward in the sorted data (which is descending, so this moves back in time)
-            current_pos += 12
-        
-        if debug:
-            print("\nCollected records:")
-            for i, record in enumerate(yearly_records):
-                print(f"Year {i+1}: {record[date_col]} - {record[value_col]}%")
-        
-        if len(yearly_records) < 2:
-            if debug:
-                print("Error: Not enough yearly records collected")
-            return None, None
-        
-        # Calculate compound growth rate
-        # Convert percentage to decimal and add 1 for compounding
-        growth_factors = [1 + (record[value_col] / 100) for record in yearly_records]
-        compound_growth = np.prod(growth_factors)
-        
-        # Calculate the nth root (where n is the number of years)
-        n = len(yearly_records)
-        cagr = (compound_growth ** (1/n)) - 1
-        
-        # Get date range
-        date_range = f"{yearly_records[-1][date_col].strftime('%Y-%m')} to {yearly_records[0][date_col].strftime('%Y-%m')}"
-        
-        if debug:
-            print(f"\nCalculation details:")
-            print(f"Number of years: {n}")
-            print(f"Growth factors: {growth_factors}")
-            print(f"Compound growth: {compound_growth}")
-            print(f"Final CAGR: {cagr * 100:.2f}%")
-            print(f"Date range: {date_range}")
-        
-        return cagr * 100, date_range  # Convert back to percentage
-        
-    except Exception as e:
-        if debug:
-            print(f"Error in CAGR calculation: {str(e)}")
-        logger.error(f"计算10年复合增长率时出错: {str(e)}")
-        return None, None
-    
-def plot_cpi_trends(cpi_data):
-    """
-    绘制 CPI 各国 YoY 走势
-    """
-    plt.rcParams['font.family'] = 'SimHei'
-    plt.rcParams['axes.unicode_minus'] = False
-    
-    plt.figure(figsize=(12, 6))
-    
-    # 美国 YoY
-    us_yoy = cpi_data['US_yearly']
-    plt.plot(us_yoy['时间'], us_yoy['现值'], label='US CPI YoY', linestyle='--')
-
-    # 中国 YoY
-    cn_yoy = cpi_data['CN_yearly']
-    plt.plot(cn_yoy['日期'], cn_yoy['今值'], label='CN CPI YoY', linestyle='--')
-
-    # 香港 YoY
-    hk_df = cpi_data['HK_yearly']
-    plt.plot(hk_df['日期'], hk_df['YoY'], label='HK CPI YoY', linestyle='--')
-    
-    plt.title('CPI同比（YoY）走势')
-    plt.xlabel('时间')
-    plt.ylabel('%')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig("output/cpi_trends.png")
-    plt.close()
+def _load_hk_local_fallback() -> pd.DataFrame:
+    local_candidates = sorted(SEED_DATA_DIR.glob("Table 510*.xlsx"))
+    if not local_candidates:
+        raise FileNotFoundError("未找到匹配的 Table 510*.xlsx 文件")
+    latest_file = max(local_candidates, key=lambda path: path.stat().st_mtime)
+    logger.warning("香港 CPI API 失败，回退到本地种子表格: %s", latest_file)
+    return load_hk_composite_cpi(latest_file)
 
 
-def plot_cpi_trends_since_2024(cpi_data):
-    """
-    绘制 2024 年以后的 CPI 各国 YoY 走势
-    """
-    plt.rcParams['font.family'] = 'SimHei'
-    plt.rcParams['axes.unicode_minus'] = False
+def get_cpi_data(time_range: int = 200) -> dict[str, pd.DataFrame]:
+    data: dict[str, pd.DataFrame] = {}
 
-    plt.figure(figsize=(12, 6))
-    start_date = pd.Timestamp("2024-01-01")
-
-    # 美国 YoY
-    us_yoy = cpi_data['US_yearly']
-    us_yoy['时间'] = pd.to_datetime(us_yoy['时间'])
-    us_yoy = us_yoy[us_yoy['时间'] >= start_date]
-    plt.plot(us_yoy['时间'], us_yoy['现值'], label='US CPI YoY', linestyle='--')
-
-    # 中国 YoY
-    cn_yoy = cpi_data['CN_yearly']
-    cn_yoy['日期'] = pd.to_datetime(cn_yoy['日期'])
-    cn_yoy = cn_yoy[cn_yoy['日期'] >= start_date]
-    plt.plot(cn_yoy['日期'], cn_yoy['今值'], label='CN CPI YoY', linestyle='--')
-
-    # 香港 YoY
-    hk_df = cpi_data['HK_yearly']
-    hk_df['日期'] = pd.to_datetime(hk_df['日期'])
-    hk_df = hk_df[hk_df['日期'] >= start_date]
-    plt.plot(hk_df['日期'], hk_df['YoY'], label='HK CPI YoY', linestyle='--')
-    
-    plt.title('2024年起 CPI同比（YoY）走势')
-    plt.xlabel('时间')
-    plt.ylabel('%')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig("output/cpi_trends_since_2024.png")
-    plt.close()
-
-
-
-def plot_cpi_cagr_bar(metrics_df):
-    """
-    绘制各国 CPI 10年复合增长率比较条形图
-    """
-    
-    plt.rcParams['font.family'] = 'SimHei'
-    plt.rcParams['axes.unicode_minus'] = False
-    
-    df = metrics_df.copy().sort_values(by='cagr_10y', ascending=True)
-    plt.figure(figsize=(8, 5))
-    bars = plt.barh(df['region'], df['cagr_10y'])
-
-    for bar, text in zip(bars, df['date_range']):
-        width = bar.get_width()
-        plt.text(width + 0.05, bar.get_y() + bar.get_height()/2,
-                 f"{width:.2f}% ({text})", va='center')
-
-    plt.title("CPI/PCE 十年复合增长率（CAGR）")
-    plt.xlabel('%')
-    plt.tight_layout()
-    plt.grid(True, axis='x')
-    plt.savefig("output/cpi_cagr_bar.png")
-    plt.close()
-
-
-
-def generate_report(debug=False):
-    """
-    生成宏观经济指标报告
-    
-    Args:
-        debug: Boolean flag to enable debug messages
-    """
-    print("="*50)
-    print("宏观经济指标统计")
-    print("="*50)
-    print(f"报告生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    time_range = 200 # getting 200 data points
-
-    # Task 1: CPI/PCE分析
-    print("\n1. CPI分析")
-    print("-"*30)
-    cpi_data = get_cpi_data(time_range)
-    if (debug):
-        print(cpi_data)
-    cpi_metrics = calculate_cpi_metrics(cpi_data, debug)
-    print(cpi_metrics)
-    
-    output_path = 'output'
-    os.makedirs(output_path, exist_ok=True)
-    
-    # 保存原始数据
-    raw_data_path = os.path.join(output_path, 'raw_data')
-    os.makedirs(raw_data_path, exist_ok=True)
-    
-    for name, df in cpi_data.items():
-        df.to_excel(os.path.join(raw_data_path, f"cpi_{name}.xlsx"), index=False)
-
-    # 格式化输出表格
-    def format_date(dt):
-        if pd.isna(dt):
-            return "-"
+    for key, (series_id, region, indicator, source_name) in FRED_SERIES.items():
         try:
-            return pd.to_datetime(dt).strftime("%Y-%m")
-        except:
-            return "-"
+            data[key] = _fetch_us_series_with_fred(series_id, source_name).tail(time_range).reset_index(drop=True)
+        except Exception as exc:
+            logger.warning("%s %s 官方 FRED 失败，回退到 AkShare：%s", region, indicator, exc)
+            fallback = _fallback_us_cpi if key == "US_CPI" else _fallback_us_pce
+            data[key] = fallback().tail(time_range).reset_index(drop=True)
 
-    def format_row(row):
-        if row['region'] == 'US_PCE':
-            indicator = 'Core PCE'
-            region = '美国'
-        elif row['region'] == 'US':
-            indicator = 'CPI'
-            region = '美国'
-        elif row['region'] == 'CN':
-            indicator = 'CPI'
-            region = '中国'
-        elif row['region'] == 'HK':
-            indicator = 'CPI'
-            region = '香港'
-        else:
-            indicator = row['region']
-            region = row['region']
+    try:
+        data["CN_CPI"] = _fetch_china_cpi_from_nbs_official().tail(time_range).reset_index(drop=True)
+    except Exception as exc:
+        logger.warning("中国 CPI 官方链路失败，回退到 AkShare macro_china_cpi(): %s", exc)
+        try:
+            data["CN_CPI"] = _fetch_china_cpi_from_akshare().tail(time_range).reset_index(drop=True)
+        except Exception as fallback_exc:
+            logger.warning("中国 CPI AkShare 回退失败，尝试读取本地缓存：%s", fallback_exc)
+            cache_path = RAW_DATA_DIR / "cpi_cn_cpi.xlsx"
+            data["CN_CPI"] = _load_cached_cpi_frame(cache_path, CHINA_CACHE_SOURCE).tail(time_range).reset_index(drop=True)
 
-        return pd.Series({
-            '区域': region,
-            '指标': indicator,
-            'MoM (%)': round(row['mom_value'], 2) if pd.notna(row['mom_value']) else '-',
-            'MoM 日期': format_date(row['mom_date']),
-            'YoY (%)': round(row['yoy_value'], 2) if pd.notna(row['yoy_value']) else '-',
-            'YoY 日期': format_date(row['yoy_date']),
-            '年化增长10年均值（%）': round(row['cagr_10y'], 2) if pd.notna(row['cagr_10y']) else '-',
-            '年化增长10年均值日期': row['date_range'] if pd.notna(row['date_range']) else '-'
-        })
+    try:
+        data["HK_CPI"] = _fetch_hk_cpi_from_api().tail(time_range).reset_index(drop=True)
+    except Exception as exc:
+        logger.warning("香港 CPI 官方 API 失败，回退到本地种子表格：%s", exc)
+        data["HK_CPI"] = _load_hk_local_fallback().tail(time_range).reset_index(drop=True)
 
-    formatted_df = cpi_metrics.apply(format_row, axis=1)
-    formatted_df.to_excel(f"{output_path}/cpi_metrics.xlsx", index=False)
+    return data
 
+
+def calculate_cpi_metrics(cpi_data: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    result_rows: list[dict[str, Any]] = []
+    mapping = {
+        "US_CPI": ("美国", "CPI"),
+        "US_PCE": ("美国", "核心 PCE"),
+        "CN_CPI": ("中国", "CPI"),
+        "HK_CPI": ("香港", "CPI"),
+    }
+    for key, (region, indicator) in mapping.items():
+        frame = cpi_data.get(key)
+        if frame is None or frame.empty:
+            continue
+        valid = frame.sort_values("日期").reset_index(drop=True)
+        latest_mom = valid.dropna(subset=["MoM"]).iloc[-1] if valid["MoM"].notna().any() else None
+        latest_yoy = valid.dropna(subset=["YoY"]).iloc[-1] if valid["YoY"].notna().any() else None
+        cagr_10y, date_range = _compute_index_cagr(valid)
+        result_rows.append(
+            {
+                "region": region,
+                "indicator": indicator,
+                "mom_value": None if latest_mom is None else latest_mom["MoM"],
+                "mom_date": None if latest_mom is None else latest_mom["日期"],
+                "yoy_value": None if latest_yoy is None else latest_yoy["YoY"],
+                "yoy_date": None if latest_yoy is None else latest_yoy["日期"],
+                "cagr_10y": cagr_10y,
+                "date_range": date_range,
+                "data_source": valid["数据源"].dropna().iloc[-1] if valid["数据源"].notna().any() else "",
+            }
+        )
+    return pd.DataFrame(result_rows)
+
+
+def plot_cpi_trends(cpi_data: dict[str, pd.DataFrame]) -> None:
+    latest_dates = [
+        pd.to_datetime(frame["日期"], errors="coerce").dropna().max()
+        for frame in cpi_data.values()
+        if frame is not None and not frame.empty
+    ]
+    if not latest_dates:
+        return
+    window_end = max(latest_dates)
+    window_start = window_end - pd.DateOffset(years=10)
+
+    plt.rcParams["font.family"] = "SimHei"
+    plt.rcParams["axes.unicode_minus"] = False
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    plot_specs = [
+        ("US_CPI", "美国 CPI YoY"),
+        ("US_PCE", "美国核心 PCE YoY"),
+        ("CN_CPI", "中国 CPI YoY"),
+        ("HK_CPI", "香港 CPI YoY"),
+    ]
+    for key, label in plot_specs:
+        frame = cpi_data.get(key)
+        if frame is None or frame.empty:
+            continue
+        series = frame.dropna(subset=["日期", "YoY"]).copy()
+        series["日期"] = pd.to_datetime(series["日期"], errors="coerce")
+        series = series[(series["日期"] >= window_start) & (series["日期"] <= window_end)]
+        if series.empty:
+            continue
+        ax.plot(series["日期"], series["YoY"], label=label, linestyle="--")
+
+    ax.set_title("CPI / PCE 同比（最近 10 年）")
+    ax.set_xlabel("时间")
+    ax.set_ylabel("%")
+    ax.legend()
+    ax.grid(True)
+    ax.xaxis.set_major_locator(mdates.YearLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(OUTPUT_DIR / "cpi_trends.png")
+    plt.close(fig)
+
+
+def generate_report(debug: bool = False) -> pd.DataFrame:
+    print("=" * 50)
+    print("宏观经济指标统计")
+    print("=" * 50)
+    print(f"报告生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("\n1. CPI分析")
+    print("-" * 30)
+
+    cpi_data = get_cpi_data(time_range=240)
+    if debug:
+        for name, frame in cpi_data.items():
+            print(f"\n[{name}]")
+            print(frame.tail(5))
+
+    for name, frame in cpi_data.items():
+        _save_raw_frame(f"cpi_{name.lower()}.xlsx", frame)
+
+    cpi_metrics = calculate_cpi_metrics(cpi_data)
+    print(cpi_metrics)
+
+    formatted_df = cpi_metrics.apply(
+        lambda row: pd.Series(
+            {
+                "区域": row["region"],
+                "指标": row["indicator"],
+                "MoM (%)": "-" if pd.isna(row["mom_value"]) else round(float(row["mom_value"]), 2),
+                "MoM 日期": _format_metric_date(row["mom_date"]),
+                "YoY (%)": "-" if pd.isna(row["yoy_value"]) else round(float(row["yoy_value"]), 2),
+                "YoY 日期": _format_metric_date(row["yoy_date"]),
+                "年化增长10年均值（%）": "-" if pd.isna(row["cagr_10y"]) else round(float(row["cagr_10y"]), 2),
+                "年化增长10年均值日期": row["date_range"] or "-",
+                "数据源": row["data_source"],
+            }
+        ),
+        axis=1,
+    )
+    formatted_df.to_excel(OUTPUT_DIR / "cpi_metrics.xlsx", index=False)
     plot_cpi_trends(cpi_data)
-    # plot_cpi_trends_since_2024(cpi_data)
-    # plot_cpi_cagr_bar(cpi_metrics)
+    return formatted_df
 
-def main(debug = False):
+
+def main(debug: bool = False) -> None:
     try:
         generate_report(debug=debug)
-    except Exception as e:
-        logger.error(f"生成报告时出错: {str(e)}")
-        
-if __name__ == '__main__':
+    except Exception as exc:
+        logger.error("生成 CPI 报告时出错: %s", exc)
+        raise
+
+
+if __name__ == "__main__":
     main()
-    
-    

@@ -335,8 +335,10 @@ def main(debug: bool = False):
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / 'bonds.xlsx'
     with pd.ExcelWriter(out_file, engine='openpyxl') as writer:
-        df_t.to_excel(writer, sheet_name='bonds', header=False, index=True)
+        df_t.to_excel(writer, sheet_name='bonds', header=False, index=True, startrow=1)
         ws = writer.sheets['bonds']
+        ws["A1"] = "当前时间"
+        ws["B1"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # 单元格居中
         max_row = ws.max_row
@@ -353,22 +355,22 @@ def main(debug: bool = False):
         us_start, us_end = 6, 9
 
         # 行索引（1-based）：
-        # 1: 指标类别, 2: 指标, 3: 种类, 4: 月收益率年化, 5: 年收益率, 6: 年化波动率,
-        # 7: 国债总市值, 8: 债券市场总市值, 9: 当日交易量, 10: 月交易量
+        # 2: 指标类别, 3: 指标, 4: 种类, 5: 月收益率年化, 6: 年收益率, 7: 年化波动率,
+        # 8: 国债总市值, 9: 债券市场总市值, 10: 当日交易量, 11: 月交易量
 
         # 合并“指标类别”
-        ws.merge_cells(start_row=1, start_column=cn_start, end_row=1, end_column=cn_end)
-        ws.merge_cells(start_row=1, start_column=us_start, end_row=1, end_column=us_end)
+        ws.merge_cells(start_row=2, start_column=cn_start, end_row=2, end_column=cn_end)
+        ws.merge_cells(start_row=2, start_column=us_start, end_row=2, end_column=us_end)
 
         # 合并“指标”内的小类
-        ws.merge_cells(start_row=2, start_column=2, end_row=2, end_column=3)  # 中国记账式国债（2列）
-        ws.merge_cells(start_row=2, start_column=4, end_row=2, end_column=5)  # 中国储蓄式国债（2列）
-        ws.merge_cells(start_row=2, start_column=6, end_row=2, end_column=7)  # 美国记账式国债（2列）
-        ws.merge_cells(start_row=2, start_column=8, end_row=2, end_column=9)  # 美国储蓄式国债（2列）
+        ws.merge_cells(start_row=3, start_column=2, end_row=3, end_column=3)  # 中国记账式国债（2列）
+        ws.merge_cells(start_row=3, start_column=4, end_row=3, end_column=5)  # 中国储蓄式国债（2列）
+        ws.merge_cells(start_row=3, start_column=6, end_row=3, end_column=7)  # 美国记账式国债（2列）
+        ws.merge_cells(start_row=3, start_column=8, end_row=3, end_column=9)  # 美国储蓄式国债（2列）
 
         # 仅对“国债总市值 ($)”与“债券市场总市值 ($)”两行按国家范围合并
-        # 行 7、8 分别为这两项
-        for row_idx in (7, 8):
+        # 行 8、9 分别为这两项
+        for row_idx in (8, 9):
             ws.merge_cells(start_row=row_idx, start_column=cn_start, end_row=row_idx, end_column=cn_end)  # 中国 B..E
             ws.merge_cells(start_row=row_idx, start_column=us_start, end_row=row_idx, end_column=us_end)  # 美国 F..I
 

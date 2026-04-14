@@ -30,13 +30,14 @@ $env:FRED_API_KEY="your_fred_api_key"
 
 #### 3. 手动准备的数据文件
 
-主要通过 AKShare、yfinance 和 FRED 自动获取数据，但仍有少量数据需要提前下载并放入 `data/seeds/`。
+主要通过 AKShare、yfinance、FRED 和官方统计接口自动获取数据，但仍有少量数据需要提前下载并放入 `data/seeds/`。
 
 > 已设置文件名正则匹配，更新文件后通常不需要改代码
 
 - 香港 CPI：[政府統計處 : 表510-60001：消費物價指數](https://www.censtatd.gov.hk/tc/web_table.html?full_series=1&id=510-60001#)
-  - 需要选择“完整数列”，下载长周期完整数据
-  - 删去按年计算的 CPI，仅保留按月结果
+  - 当前主流程优先使用香港统计处 API 自动拉取
+  - 本地 `Table 510*.xlsx` 仅作为 API 失败时的兜底种子文件
+  - 如需手工准备，仍建议选择“完整数列”，下载长周期完整数据
 ![CPI_HK 获取图](docs/assets/CPI_HK.png)
 
 - 恒生指数成分股：[指數及成份股 - 指數成份股 - 恆生指數](http://www.aastocks.com/tc/stocks/market/index/hk-index-con.aspx?index=HSI)
@@ -118,6 +119,7 @@ python -m scripts.pipelines.secondary_market_report
 - `AMR_HTTP_PROXY`
 - `AMR_HTTPS_PROXY`
 - `FRED_API_KEY`
+  - 用于美国 GDP、利率、CPI、核心 PCE 等官方 FRED 序列
 - `AMR_GAINER_CURRENT_DATE`
 - `AMR_GAINER_PREVIOUS_DATE`
 - `AMR_GOLD_CURRENT_PRICE`
@@ -213,9 +215,9 @@ docker compose run --rm amr-cli python -m scripts.validation.validate_outputs
 | 利差 | `scripts/pipelines/carry_trade_report.py` | `currency_spreads.png` |
 | 汇率 | `scripts/pipelines/fx_report.py` | `fx_metrics.xlsx` |
 | 股票权益 | `scripts/pipelines/stock_index_report.py`、`scripts/pipelines/stock_cap_report.py` | `stock_weekly_report.xlsx` |
-| 债券 | `scripts/pipelines/bond_report.py` | `bonds.xlsx` |
-| 商品与贵金属 | `scripts/pipelines/precious_metals_report.py` | `commodity_indicators_summary.xlsx` |
-| 数字货币 | `scripts/pipelines/crypto_report.py` | `crypto_metrics.xlsx` |
+| 债券 | `scripts/pipelines/bond_report.py` | `bonds.xlsx`（顶部新增“当前时间”元数据行） |
+| 商品与贵金属 | `scripts/pipelines/precious_metals_report.py` | `commodity_indicators_summary.xlsx`（顶部新增“当前时间”元数据行） |
+| 数字货币 | `scripts/pipelines/crypto_report.py` | `crypto_metrics.xlsx`（顶部新增“当前时间”元数据行） |
 | Gainer | `scripts/gainer.py` | `Gainer.xlsx` |
 | 整体 | `scripts/overall.py` | `整体_processed.xlsx` |
 | 二级市场 | `scripts/pipelines/secondary_market_report.py` | `mixed_market_report_*.xlsx` |
@@ -247,12 +249,14 @@ docker compose run --rm amr-cli python -m scripts.validation.validate_outputs
 
 | 地区 | 数据类型 | 数据源说明 |
 | --- | --- | --- |
-| 美国 | 月度 CPI（MoM） | `akshare.macro_usa_cpi_monthly()` |
-| 美国 | 年度 CPI（YoY） | `akshare.macro_usa_cpi_yoy()` |
-| 美国 | 年度 PCE（YoY） | `akshare.macro_usa_core_pce_price()` |
-| 中国 | 月度 CPI（MoM） | `akshare.macro_china_cpi_monthly()` |
-| 中国 | 年度 CPI（YoY） | `akshare.macro_china_cpi_yearly()` |
-| 香港 | 年度&月度 CPI | 本地 Excel：`data/seeds/Table 510-60001_tc.xlsx` |
+| 美国 | CPI 指数 / MoM / YoY | FRED 官方序列 `CPIAUCSL`，本地由指数计算 MoM / YoY |
+| 美国 | 核心 PCE 指数 / MoM / YoY | FRED 官方序列 `PCEPILFE`，本地由指数计算 MoM / YoY |
+| 中国 | CPI 指数 / MoM / YoY | 国家统计局官方链路优先；若本机受 WAF 限制，则自动回退到 `akshare.macro_china_cpi()` |
+| 香港 | CPI 指数 / MoM / YoY | 香港统计处 API 优先；本地 Excel：`data/seeds/Table 510-60001_tc.xlsx` 仅作兜底 |
+
+- 中国 CPI 不再主用滞后的 `macro_china_cpi_monthly()` / `macro_china_cpi_yearly()` Jin10 接口。
+- 若中国国家统计局官方站点在当前网络环境中返回 403 或非 JSON，脚本会自动切换到 AkShare 官方文档中明确存在的 `macro_china_cpi()`。
+- `cpi_metrics.xlsx` 会写出 `数据源` 列，便于区分 `fred`、`china_nbs`、`china_akshare_macro_china_cpi`、`hk_censtatd_api` 和香港本地种子兜底。
 
 $$
 \text{CAGR} = \left( \prod_{i=1}^{n} \left(1 + \frac{r_i}{100} \right) \right)^{\frac{1}{n}} - 1

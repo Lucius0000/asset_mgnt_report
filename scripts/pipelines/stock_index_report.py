@@ -68,8 +68,16 @@ class StockIndexAnalyzer:
         TimePeriod('5-Year', 1825, True)       # 1825天 (约5年) - 几何平均
     ]
     
-    def __init__(self, debug: bool = False, progress_callback=None, cancel_check=None):
+    def __init__(
+        self,
+        debug: bool = False,
+        selected_markets: list[str] | None = None,
+        progress_callback=None,
+        cancel_check=None,
+    ):
         self.debug = debug
+        normalized_markets = [market.upper() for market in (selected_markets or list(self.MARKETS.keys()))]
+        self.selected_markets = [market for market in self.MARKETS.keys() if market in normalized_markets]
         self.progress_callback = progress_callback
         self.cancel_check = cancel_check
         # 验证时间周期配置
@@ -366,8 +374,8 @@ class StockIndexAnalyzer:
         
         market_data = {}
         
-        total_markets = len(self.MARKETS)
-        for index, market in enumerate(self.MARKETS.keys(), start=1):
+        total_markets = len(self.selected_markets)
+        for index, market in enumerate(self.selected_markets, start=1):
             ensure_not_cancelled(self.cancel_check)
             emit_progress(
                 self.progress_callback,
@@ -482,10 +490,14 @@ class StockIndexAnalyzer:
             )
             time.sleep(1)
         ensure_not_cancelled(self.cancel_check)
-        index_caps = get_all_index_caps(progress_callback=self.progress_callback, cancel_check=self.cancel_check)
+        index_caps = get_all_index_caps(
+            progress_callback=self.progress_callback,
+            cancel_check=self.cancel_check,
+            selected_markets=self.selected_markets,
+        )
         emit_progress(self.progress_callback, "subtask_complete", subtask="股票指数市值", progress_label="股指总市值完成", progress_ratio=1.0)
     
-        ordered_markets = ['US', 'CN', 'HK']
+        ordered_markets = [market for market in ['US', 'CN', 'HK'] if market in self.selected_markets]
     
         market_display = {
             'US': '美国',
@@ -634,6 +646,8 @@ class StockIndexAnalyzer:
     def run_analysis(self, time_range: int = 2920):
         """运行完整分析"""
         try:
+            if not self.selected_markets:
+                raise ValueError("股票权益模块至少需要选择一个市场。")
             logger.info(f"Starting stock index analysis... (time_range={time_range} days, debug={self.debug})")
             emit_progress(self.progress_callback, "subtask_start", subtask="股票权益", progress_label="开始抓取指数数据", progress_ratio=0.0)
             
@@ -713,9 +727,20 @@ class StockIndexAnalyzer:
             else:
                 print(f"\n{config.name} ({market}) - Data fetch failed")
 
-def main(time_range: int = 2920, debug: bool = False, progress_callback=None, cancel_check=None):
+def main(
+    time_range: int = 2920,
+    debug: bool = False,
+    progress_callback=None,
+    cancel_check=None,
+    stock_markets: list[str] | None = None,
+):
     """主函数"""
-    analyzer = StockIndexAnalyzer(debug=debug, progress_callback=progress_callback, cancel_check=cancel_check)
+    analyzer = StockIndexAnalyzer(
+        debug=debug,
+        selected_markets=stock_markets,
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
+    )
     analyzer.run_analysis(time_range=time_range)
 
 if __name__ == "__main__":

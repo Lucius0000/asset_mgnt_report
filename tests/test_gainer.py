@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import pandas as pd
 
 from scripts import gainer
 
@@ -50,6 +51,71 @@ def test_prompt_date_normalizes_explicit_date_without_prompt(monkeypatch) -> Non
         )
 
         assert result == datetime(2026, 4, 18)
+    finally:
+        gainer.CONFIG.clear()
+        gainer.CONFIG.update(original_config)
+
+
+def test_gainer_main_respects_selected_modules_and_markets(tmp_path, monkeypatch) -> None:
+    output_path = tmp_path / "Gainer.xlsx"
+    original_config = dict(gainer.CONFIG)
+    try:
+        gainer.CONFIG.update(
+            {
+                "modules": ["stocks", "btc"],
+                "stock_markets": ["US"],
+                "current_date": datetime(2026, 4, 11),
+                "previous_date": datetime(2026, 3, 28),
+                "output_path": output_path,
+            }
+        )
+
+        monkeypatch.setattr(gainer, "_compute_stock_caps", lambda *args, **kwargs: {"US": {"unit": "USD", "old": 2_000_000_000, "new": 2_250_000_000}})
+        monkeypatch.setattr(gainer, "_compute_bond_caps", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("bonds should not run")))
+        monkeypatch.setattr(gainer, "_compute_gold_caps", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("gold should not run")))
+        monkeypatch.setattr(gainer, "_compute_btc_caps", lambda *args, **kwargs: (900_000_000_000, 980_000_000_000))
+        monkeypatch.setattr(
+            "builtins.input",
+            lambda _prompt: (_ for _ in ()).throw(AssertionError("input should not be called")),
+        )
+
+        gainer.main()
+
+        assert output_path.exists()
+        result = pd.read_excel(output_path)
+        assert result["资产大类"].fillna("").tolist() == ["股票权益", ""]
+        assert result["区域"].tolist() == ["美国", "数字货币（BTC）"]
+    finally:
+        gainer.CONFIG.clear()
+        gainer.CONFIG.update(original_config)
+
+
+def test_gainer_main_skips_gold_prompt_when_gold_module_not_selected(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "Gainer.xlsx"
+    original_config = dict(gainer.CONFIG)
+    try:
+        gainer.CONFIG.update(
+            {
+                "modules": ["bonds"],
+                "current_date": datetime(2026, 4, 11),
+                "previous_date": datetime(2026, 3, 28),
+                "output_path": output_path,
+            }
+        )
+        monkeypatch.setattr(
+            gainer.gainer_gold,
+            "_prompt_price",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("gold prompt should not run")),
+        )
+        monkeypatch.setattr(gainer, "_compute_bond_caps", lambda *args, **kwargs: {"US": {"previous": 10.0, "current": 11.0}, "CN": {"previous": 20.0, "current": 21.0}})
+        monkeypatch.setattr(
+            "builtins.input",
+            lambda _prompt: (_ for _ in ()).throw(AssertionError("input should not be called")),
+        )
+
+        gainer.main()
+
+        assert output_path.exists()
     finally:
         gainer.CONFIG.clear()
         gainer.CONFIG.update(original_config)

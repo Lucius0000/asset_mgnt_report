@@ -25,19 +25,31 @@ CONFIG = {
         "bonds",
         "crypto",
     ],
+    "stock_markets": ["CN", "US", "HK"],
 }
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+STOCK_MARKET_OPTIONS = ("CN", "US", "HK")
+
+
+def _normalize_stock_markets(stock_markets: list[str] | None) -> list[str]:
+    selected = stock_markets or CONFIG["stock_markets"]
+    normalized = [market.upper() for market in selected if market and market.upper() in STOCK_MARKET_OPTIONS]
+    # 保持顺序稳定，避免 UI / CLI 选择顺序影响输出列顺序。
+    return [market for market in STOCK_MARKET_OPTIONS if market in normalized]
 
 
 def main(
     debug: bool | None = None,
     modules: list[str] | None = None,
+    stock_markets: list[str] | None = None,
     progress_callback=None,
     cancel_check=None,
 ) -> None:
     config = build_app_config(overrides={"debug": CONFIG["debug"] if debug is None else debug})
     selected_modules = modules or CONFIG["modules"]
+    selected_stock_markets = _normalize_stock_markets(stock_markets)
     total_modules = len(selected_modules)
     completed_modules: list[str] = []
     emit_progress(
@@ -48,6 +60,13 @@ def main(
     )
     for index, module_name in enumerate(selected_modules, start=1):
         ensure_not_cancelled(cancel_check)
+        runner_kwargs = {
+            "debug": config.debug,
+            "progress_callback": progress_callback,
+            "cancel_check": cancel_check,
+        }
+        if module_name == "stock_index":
+            runner_kwargs["stock_markets"] = selected_stock_markets
         emit_progress(
             progress_callback,
             "module_start",
@@ -59,22 +78,15 @@ def main(
             progress_ratio=(index - 1) / total_modules if total_modules else 0.0,
         )
         try:
-            run_named_pipeline(
-                module_name,
-                debug=config.debug,
-                progress_callback=progress_callback,
-                cancel_check=cancel_check,
-            )
+            run_named_pipeline(module_name, **runner_kwargs)
         except TypeError:
             try:
-                run_named_pipeline(
-                    module_name,
-                    debug=config.debug,
-                    progress_callback=progress_callback,
-                )
+                runner_kwargs.pop("cancel_check", None)
+                run_named_pipeline(module_name, **runner_kwargs)
             except TypeError:
                 try:
-                    run_named_pipeline(module_name, debug=config.debug)
+                    runner_kwargs.pop("progress_callback", None)
+                    run_named_pipeline(module_name, **runner_kwargs)
                 except TypeError:
                     run_named_pipeline(module_name)
         except JobCancelledError:

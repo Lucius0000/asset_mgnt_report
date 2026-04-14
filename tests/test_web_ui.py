@@ -1,3 +1,5 @@
+from datetime import date
+
 from streamlit.testing.v1 import AppTest
 
 from src.asset_mgnt_report.config.defaults import build_app_config
@@ -36,14 +38,18 @@ def test_home_button_navigates_to_main_workspace() -> None:
     assert not at.exception
     assert any(button.label == "返回概览" for button in at.button)
     assert any(button.label == "执行主报表" for button in at.button)
-    assert len(at.multiselect) == 1
+    assert len(at.multiselect) == 2
     assert at.multiselect[0].label == "主报表模块"
+    assert at.multiselect[1].label == "股票权益市场"
 
 
 def test_gainer_page_uses_calendar_inputs_and_shows_lbma_hint() -> None:
     at = _run_page("gainer")
 
     assert not at.exception
+    multiselect_labels = [widget.label for widget in at.multiselect]
+    assert "Gainer 子模块" in multiselect_labels
+    assert "股票子模块市场" in multiselect_labels
     date_labels = [widget.label for widget in at.date_input]
     assert "本周末日期（周六）" in date_labels
     assert "两周前日期（周六）" in date_labels
@@ -159,3 +165,75 @@ def test_apply_progress_event_updates_current_unit_and_subtask() -> None:
     assert job["current_unit"] == "步骤 1 / 股票市值"
     assert job["current_subtask"] == "S&P 500"
     assert job["current_subtask_label"] == "S&P 500 120/503"
+
+
+def test_run_main_action_passes_selected_stock_markets(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    fake_state = {
+        "debug": False,
+        "use_proxy": True,
+        "main_modules": ["stock_index", "currency"],
+        "main_stock_markets": ["CN", "US"],
+        "result": None,
+        "active_job_id": None,
+    }
+    original_state = streamlit_app.st.session_state
+    original_start = streamlit_app._start_background_job
+    original_main = streamlit_app.main_entry.main
+    streamlit_app.st.session_state = fake_state
+
+    def fake_start_background_job(label, callback):
+        callback(lambda _event: None, lambda: False)
+        fake_state["result"] = {"label": label, "status": "success"}
+
+    def fake_main(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(streamlit_app, "_start_background_job", fake_start_background_job)
+    monkeypatch.setattr(streamlit_app.main_entry, "main", fake_main)
+    try:
+        streamlit_app._run_main_action()
+        assert captured["modules"] == ["stock_index", "currency"]
+        assert captured["stock_markets"] == ["CN", "US"]
+    finally:
+        streamlit_app._start_background_job = original_start
+        streamlit_app.main_entry.main = original_main
+        streamlit_app.st.session_state = original_state
+
+
+def test_run_gainer_action_passes_selected_modules_and_markets(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    fake_state = {
+        "debug": False,
+        "use_proxy": True,
+        "gainer_modules": ["stocks", "btc"],
+        "gainer_stock_markets": ["US"],
+        "gainer_current_date": date(2026, 4, 11),
+        "gainer_previous_date": date(2026, 3, 28),
+        "gainer_current_gold_price": "",
+        "gainer_previous_gold_price": "",
+        "result": None,
+        "active_job_id": None,
+    }
+    original_state = streamlit_app.st.session_state
+    original_start = streamlit_app._start_background_job
+    original_gainer = streamlit_app.gainer_entry.main
+    streamlit_app.st.session_state = fake_state
+
+    def fake_start_background_job(label, callback):
+        callback(lambda _event: None, lambda: False)
+        fake_state["result"] = {"label": label, "status": "success"}
+
+    def fake_gainer_main(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(streamlit_app, "_start_background_job", fake_start_background_job)
+    monkeypatch.setattr(streamlit_app.gainer_entry, "main", fake_gainer_main)
+    try:
+        streamlit_app._run_gainer_action()
+        assert captured["modules"] == ["stocks", "btc"]
+        assert captured["stock_markets"] == ["US"]
+    finally:
+        streamlit_app._start_background_job = original_start
+        streamlit_app.gainer_entry.main = original_gainer
+        streamlit_app.st.session_state = original_state

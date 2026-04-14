@@ -27,11 +27,28 @@ from src.asset_mgnt_report.services.progress import emit_progress, ensure_not_ca
 OUTPUT_PATH = Path("output") / "Gainer.xlsx"
 APP_CONFIG = build_app_config()
 
+GAINER_MODULE_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("stocks", "股票权益"),
+    ("bonds", "债券固收"),
+    ("gold", "商品与贵金属（黄金）"),
+    ("btc", "数字货币（BTC）"),
+)
+GAINER_MODULE_LABELS = {key: label for key, label in GAINER_MODULE_OPTIONS}
+STOCK_MARKET_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("CN", "中国"),
+    ("US", "美国"),
+    ("HK", "香港"),
+)
+STOCK_MARKET_LABELS = {key: label for key, label in STOCK_MARKET_OPTIONS}
+
 CONFIG = {
     "current_date": None,
     "previous_date": None,
     "current_gold_price": None,
     "previous_gold_price": None,
+    "modules": None,
+    "stock_markets": None,
+    "output_path": OUTPUT_PATH,
 }
 
 
@@ -86,6 +103,53 @@ def _prompt_date(message: str, default: Optional[datetime] = None) -> datetime:
         except ValueError:
             suffix = f"，默认值 {default:%Y-%m-%d}" if default else ""
             print(f"日期格式无效，请使用 YYYY-MM-DD{suffix}")
+
+
+def _normalize_choice_list(
+    raw_value: object,
+    options: tuple[tuple[str, str], ...],
+) -> list[str]:
+    allowed = {key.upper(): key for key, _ in options}
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, str):
+        tokens = [token.strip().upper() for token in raw_value.replace("，", ",").split(",")]
+    else:
+        tokens = [str(token).strip().upper() for token in raw_value]
+    normalized = [allowed[token] for token in tokens if token in allowed]
+    return [key for key, _ in options if key in normalized]
+
+
+def _prompt_choice_list(
+    *,
+    prompt: str,
+    default: list[str],
+    options: tuple[tuple[str, str], ...],
+    explicit: object,
+    env_key: str,
+) -> list[str]:
+    configured = resolve_config_value(
+        explicit=explicit,
+        env_key=env_key,
+        default=None,
+        caster=lambda raw: raw,
+    )
+    if configured is not None:
+        normalized = _normalize_choice_list(configured, options)
+        if normalized:
+            return normalized
+        raise ValueError(f"{env_key} / CONFIG 的配置无效，请使用 {', '.join(key for key, _ in options)}。")
+
+    option_hint = "、".join(f"{key}={label}" for key, label in options)
+    default_hint = ",".join(default)
+    while True:
+        raw = input(f"{prompt}（可选：{option_hint}，回车默认 {default_hint}）：").strip()
+        if not raw:
+            return list(default)
+        normalized = _normalize_choice_list(raw, options)
+        if normalized:
+            return normalized
+        print(f"输入无效，请使用 {', '.join(key for key, _ in options)} 的逗号组合。")
 
 
 def _ensure_saturday(date_value: datetime, label: str) -> None:
@@ -162,62 +226,52 @@ def _compute_bond_caps(current_date: datetime, previous_date: datetime) -> Dict[
 def _compute_stock_caps(
     date_old: str,
     date_new: str,
+    selected_markets: list[str],
     progress_callback=None,
     cancel_check=None,
 ) -> Dict[str, Dict[str, Optional[float]]]:
-    results: Dict[str, Dict[str, Optional[float]]] = {
-        "US": {"unit": "USD", "name": "S&P 500", "old": None, "new": None},
-        "CN": {"unit": "CNY", "name": "HS300", "old": None, "new": None},
-        "HK": {"unit": "HKD", "name": "HSI", "old": None, "new": None},
+    market_definitions: Dict[str, Dict[str, object]] = {
+        "US": {
+            "unit": "USD",
+            "name": "S&P 500",
+            "loader": gainer_stock.get_sp500_symbols,
+        },
+        "CN": {
+            "unit": "CNY",
+            "name": "HS300",
+            "loader": gainer_stock.get_hs300_symbols,
+        },
+        "HK": {
+            "unit": "HKD",
+            "name": "HSI",
+            "loader": gainer_stock.get_hsi_symbols_from_excel,
+        },
     }
+    results: Dict[str, Dict[str, Optional[float]]] = {}
 
-    print("- 正在计算标普500市值差异...")
-    try:
-        sp500_syms = gainer_stock.get_sp500_symbols()
-        old_val, new_val = gainer_stock.compute_index_caps(
-            sp500_syms,
-            date_old,
-            date_new,
-            "USD",
-            "S&P 500",
-            progress_callback=progress_callback,
-            cancel_check=cancel_check,
-        )
-        results["US"]["old"], results["US"]["new"] = old_val, new_val
-    except Exception as exc:
-        print(f"  [警告] 标普500市值计算失败：{exc}")
-
-    print("- 正在计算沪深300市值差异...")
-    try:
-        hs300_syms = gainer_stock.get_hs300_symbols()
-        old_val, new_val = gainer_stock.compute_index_caps(
-            hs300_syms,
-            date_old,
-            date_new,
-            "CNY",
-            "HS300",
-            progress_callback=progress_callback,
-            cancel_check=cancel_check,
-        )
-        results["CN"]["old"], results["CN"]["new"] = old_val, new_val
-    except Exception as exc:
-        print(f"  [警告] 沪深300市值计算失败：{exc}")
-
-    print("- 正在计算恒生指数市值差异...")
-    try:
-        hsi_syms = gainer_stock.get_hsi_symbols_from_excel()
-        old_val, new_val = gainer_stock.compute_index_caps(
-            hsi_syms,
-            date_old,
-            date_new,
-            "HKD",
-            "HSI",
-            progress_callback=progress_callback,
-            cancel_check=cancel_check,
-        )
-        results["HK"]["old"], results["HK"]["new"] = old_val, new_val
-    except Exception as exc:
-        print(f"  [警告] 恒生指数市值计算失败：{exc}")
+    for market in selected_markets:
+        config = market_definitions[market]
+        results[market] = {
+            "unit": str(config["unit"]),
+            "name": str(config["name"]),
+            "old": None,
+            "new": None,
+        }
+        print(f"- 正在计算{config['name']}市值差异...")
+        try:
+            symbols = config["loader"]()
+            old_val, new_val = gainer_stock.compute_index_caps(
+                symbols,
+                date_old,
+                date_new,
+                str(config["unit"]),
+                str(config["name"]),
+                progress_callback=progress_callback,
+                cancel_check=cancel_check,
+            )
+            results[market]["old"], results[market]["new"] = old_val, new_val
+        except Exception as exc:
+            print(f"  [警告] {config['name']}市值计算失败：{exc}")
 
     return results
 
@@ -241,7 +295,35 @@ def _compute_gold_caps(previous_price: float, current_price: float) -> Tuple[flo
     return prev_cap, curr_cap
 
 
-def main(progress_callback=None, cancel_check=None) -> None:
+def main(
+    modules: list[str] | None = None,
+    stock_markets: list[str] | None = None,
+    output_path: str | Path | None = None,
+    progress_callback=None,
+    cancel_check=None,
+) -> None:
+    selected_modules = modules or _prompt_choice_list(
+        prompt="请输入要运行的 Gainer 子模块",
+        default=[key for key, _ in GAINER_MODULE_OPTIONS],
+        options=GAINER_MODULE_OPTIONS,
+        explicit=CONFIG["modules"],
+        env_key="AMR_GAINER_MODULES",
+    )
+    if not selected_modules:
+        raise ValueError("至少需要选择一个 Gainer 子模块。")
+
+    selected_stock_markets: list[str] = []
+    if "stocks" in selected_modules:
+        selected_stock_markets = stock_markets or _prompt_choice_list(
+            prompt="请输入股票子模块需要运行的市场",
+            default=[key for key, _ in STOCK_MARKET_OPTIONS],
+            options=STOCK_MARKET_OPTIONS,
+            explicit=CONFIG["stock_markets"],
+            env_key="AMR_GAINER_STOCK_MARKETS",
+        )
+        if not selected_stock_markets:
+            raise ValueError("股票子模块至少需要选择一个市场。")
+
     default_current, default_previous = default_gainer_dates()
     current_date = _prompt_date(
         f"请输入本周末日期（YYYY-MM-DD，周六），回车默认 {default_current:%Y-%m-%d}:",
@@ -259,154 +341,165 @@ def main(progress_callback=None, cancel_check=None) -> None:
     if (current_date - previous_date).days != 14:
         raise ValueError("两周前日期需要与本周末日期相差 14 天，且两者都必须是周六。")
 
-    print("\n请提供 LBMA Gold Price PM（USD/oz）")
-    print("src: https://www.lbma.org.uk/cn/prices-and-data#/")
-    current_gold_price = gainer_gold._prompt_price(
-        "本周末价格：",
-        env_key="AMR_GOLD_CURRENT_PRICE",
-        configured=CONFIG["current_gold_price"],
-    )
-    previous_gold_price = gainer_gold._prompt_price(
-        "两周前周末价格：",
-        env_key="AMR_GOLD_PREVIOUS_PRICE",
-        configured=CONFIG["previous_gold_price"],
-    )
+    current_gold_price = previous_gold_price = None
+    if "gold" in selected_modules:
+        print("\n请提供 LBMA Gold Price PM（USD/oz）")
+        print("src: https://www.lbma.org.uk/cn/prices-and-data#/")
+        current_gold_price = gainer_gold._prompt_price(
+            "本周末价格：",
+            env_key="AMR_GOLD_CURRENT_PRICE",
+            configured=CONFIG["current_gold_price"],
+        )
+        previous_gold_price = gainer_gold._prompt_price(
+            "两周前周末价格：",
+            env_key="AMR_GOLD_PREVIOUS_PRICE",
+            configured=CONFIG["previous_gold_price"],
+        )
     
     date_old_str = previous_date.strftime("%Y-%m-%d")
     date_new_str = current_date.strftime("%Y-%m-%d")
 
+    step_templates = {
+        "stocks": "股票市值",
+        "bonds": "债券市值",
+        "gold": "黄金市值",
+        "btc": "BTC 市值",
+    }
     steps = [
-        ("step_stock", "步骤 1 / 股票市值"),
-        ("step_bond", "步骤 2 / 债券市值"),
-        ("step_gold", "步骤 3 / 黄金市值"),
-        ("step_btc", "步骤 4 / BTC 市值"),
+        (f"step_{module_name}", f"步骤 {index} / {step_templates[module_name]}")
+        for index, module_name in enumerate(selected_modules, start=1)
     ]
     emit_progress(progress_callback, "job_init", total_units=len(steps), pending_units=[label for _, label in steps])
 
-    ensure_not_cancelled(cancel_check)
-    print("\n[步骤 1] 汇总股票市值数据")
-    emit_progress(progress_callback, "step_start", step_key="step_stock", step_label=steps[0][1], completed_units=[], pending_units=[label for _, label in steps], progress_ratio=0.0)
-    stock_caps = _compute_stock_caps(date_old_str, date_new_str, progress_callback=progress_callback, cancel_check=cancel_check)
-    emit_progress(progress_callback, "step_complete", step_key="step_stock", step_label=steps[0][1], completed_units=[steps[0][1]], pending_units=[label for _, label in steps[1:]], progress_ratio=0.25)
+    step_labels = [label for _, label in steps]
+    completed_labels: list[str] = []
+    stock_caps: Dict[str, Dict[str, Optional[float]]] = {}
+    bond_caps: Dict[str, Dict[str, Optional[float]]] = {}
+    gold_prev = gold_curr = None
+    btc_prev = btc_curr = None
 
-    ensure_not_cancelled(cancel_check)
-    print("\n[步骤 2] 汇总债券市值数据")
-    emit_progress(progress_callback, "step_start", step_key="step_bond", step_label=steps[1][1], completed_units=[steps[0][1]], pending_units=[label for _, label in steps[1:]], progress_ratio=0.25)
-    bond_caps = _compute_bond_caps(current_date, previous_date)
-    emit_progress(progress_callback, "step_complete", step_key="step_bond", step_label=steps[1][1], completed_units=[label for _, label in steps[:2]], pending_units=[label for _, label in steps[2:]], progress_ratio=0.5)
-
-    ensure_not_cancelled(cancel_check)
-    print("\n[步骤 3] 汇总黄金市值数据")
-    emit_progress(progress_callback, "step_start", step_key="step_gold", step_label=steps[2][1], completed_units=[label for _, label in steps[:2]], pending_units=[label for _, label in steps[2:]], progress_ratio=0.5)
-    gold_prev, gold_curr = _compute_gold_caps(previous_gold_price, current_gold_price)
-    emit_progress(progress_callback, "step_complete", step_key="step_gold", step_label=steps[2][1], completed_units=[label for _, label in steps[:3]], pending_units=[label for _, label in steps[3:]], progress_ratio=0.75)
-
-    ensure_not_cancelled(cancel_check)
-    print("\n[步骤 4] 汇总 BTC 市值数据")
-    emit_progress(progress_callback, "step_start", step_key="step_btc", step_label=steps[3][1], completed_units=[label for _, label in steps[:3]], pending_units=[label for _, label in steps[3:]], progress_ratio=0.75)
-    btc_prev, btc_curr = _compute_btc_caps(previous_date, current_date)
-    emit_progress(progress_callback, "step_complete", step_key="step_btc", step_label=steps[3][1], completed_units=[label for _, label in steps], pending_units=[], progress_ratio=1.0)
+    for index, module_name in enumerate(selected_modules, start=1):
+        ensure_not_cancelled(cancel_check)
+        step_key, step_label = steps[index - 1]
+        print(f"\n[{step_label}] 汇总{step_templates[module_name]}数据")
+        emit_progress(
+            progress_callback,
+            "step_start",
+            step_key=step_key,
+            step_label=step_label,
+            completed_units=completed_labels,
+            pending_units=step_labels[index - 1 :],
+            progress_ratio=(index - 1) / len(steps),
+        )
+        if module_name == "stocks":
+            stock_caps = _compute_stock_caps(
+                date_old_str,
+                date_new_str,
+                selected_stock_markets,
+                progress_callback=progress_callback,
+                cancel_check=cancel_check,
+            )
+        elif module_name == "bonds":
+            bond_caps = _compute_bond_caps(current_date, previous_date)
+        elif module_name == "gold":
+            gold_prev, gold_curr = _compute_gold_caps(previous_gold_price, current_gold_price)
+        elif module_name == "btc":
+            btc_prev, btc_curr = _compute_btc_caps(previous_date, current_date)
+        completed_labels.append(step_label)
+        emit_progress(
+            progress_callback,
+            "step_complete",
+            step_key=step_key,
+            step_label=step_label,
+            completed_units=completed_labels,
+            pending_units=step_labels[index:],
+            progress_ratio=index / len(steps),
+        )
 
     rows: List[Dict[str, Optional[str]]] = []
 
-    us_stock_old = _to_billions(stock_caps["US"]["old"])
-    us_stock_new = _to_billions(stock_caps["US"]["new"])
-    rows.append({
-        "区域": "美国",
-        "资产大类": "股票权益",
-        "Market Cap Last 2 week": _format_billion(us_stock_old, "USD"),
-        "Market Cap This week": _format_billion(us_stock_new, "USD"),
-        "Gainer": _format_billion(
-            None if us_stock_old is None or us_stock_new is None else us_stock_new - us_stock_old,
-            "USD",
-        ),
-    })
+    if "stocks" in selected_modules:
+        stock_region_labels = {"US": "美国", "CN": "中国", "HK": "香港"}
+        for market in selected_stock_markets:
+            market_caps = stock_caps.get(market)
+            if not market_caps:
+                continue
+            old_value = _to_billions(market_caps["old"])
+            new_value = _to_billions(market_caps["new"])
+            rows.append({
+                "区域": stock_region_labels[market],
+                "资产大类": "股票权益",
+                "Market Cap Last 2 week": _format_billion(old_value, str(market_caps["unit"])),
+                "Market Cap This week": _format_billion(new_value, str(market_caps["unit"])),
+                "Gainer": _format_billion(
+                    None if old_value is None or new_value is None else new_value - old_value,
+                    str(market_caps["unit"]),
+                ),
+            })
 
-    us_bond_prev = bond_caps["US"]["previous"]
-    us_bond_curr = bond_caps["US"]["current"]
-    us_bond_prev_b = us_bond_prev if us_bond_prev is None else float(us_bond_prev)
-    us_bond_curr_b = us_bond_curr if us_bond_curr is None else float(us_bond_curr)
-    rows.append({
-        "区域": None,
-        "资产大类": "债券固收",
-        "Market Cap Last 2 week": _format_billion(us_bond_prev_b, "USD", decimals=0),
-        "Market Cap This week": _format_billion(us_bond_curr_b, "USD", decimals=0),
-        "Gainer": _format_billion(
-            None if us_bond_prev_b is None or us_bond_curr_b is None else us_bond_curr_b - us_bond_prev_b,
-            "USD",
-            decimals=0,
-        ),
-    })
+    if "bonds" in selected_modules:
+        us_bond_prev = bond_caps["US"]["previous"]
+        us_bond_curr = bond_caps["US"]["current"]
+        us_bond_prev_b = us_bond_prev if us_bond_prev is None else float(us_bond_prev)
+        us_bond_curr_b = us_bond_curr if us_bond_curr is None else float(us_bond_curr)
+        rows.append({
+            "区域": "美国",
+            "资产大类": "债券固收",
+            "Market Cap Last 2 week": _format_billion(us_bond_prev_b, "USD", decimals=0),
+            "Market Cap This week": _format_billion(us_bond_curr_b, "USD", decimals=0),
+            "Gainer": _format_billion(
+                None if us_bond_prev_b is None or us_bond_curr_b is None else us_bond_curr_b - us_bond_prev_b,
+                "USD",
+                decimals=0,
+            ),
+        })
 
-    cn_stock_old = _to_billions(stock_caps["CN"]["old"])
-    cn_stock_new = _to_billions(stock_caps["CN"]["new"])
-    rows.append({
-        "区域": "中国",
-        "资产大类": "股票权益",
-        "Market Cap Last 2 week": _format_billion(cn_stock_old, "CNY"),
-        "Market Cap This week": _format_billion(cn_stock_new, "CNY"),
-        "Gainer": _format_billion(
-            None if cn_stock_old is None or cn_stock_new is None else cn_stock_new - cn_stock_old,
-            "CNY",
-        ),
-    })
+        cn_bond_prev = bond_caps["CN"]["previous"]
+        cn_bond_curr = bond_caps["CN"]["current"]
+        rows.append({
+            "区域": "中国",
+            "资产大类": "债券固收",
+            "Market Cap Last 2 week": _format_billion(cn_bond_prev, "CNY"),
+            "Market Cap This week": _format_billion(cn_bond_curr, "CNY"),
+            "Gainer": _format_billion(
+                None if cn_bond_prev is None or cn_bond_curr is None else cn_bond_curr - cn_bond_prev,
+                "CNY",
+            ),
+        })
 
-    cn_bond_prev = bond_caps["CN"]["previous"]
-    cn_bond_curr = bond_caps["CN"]["current"]
-    rows.append({
-        "区域": None,
-        "资产大类": "债券固收",
-        "Market Cap Last 2 week": _format_billion(cn_bond_prev, "CNY"),
-        "Market Cap This week": _format_billion(cn_bond_curr, "CNY"),
-        "Gainer": _format_billion(
-            None if cn_bond_prev is None or cn_bond_curr is None else cn_bond_curr - cn_bond_prev,
-            "CNY",
-        ),
-    })
+    if "gold" in selected_modules:
+        gold_prev_b = _to_billions(gold_prev)
+        gold_curr_b = _to_billions(gold_curr)
+        rows.append({
+            "区域": "商品与贵金属（黄金）",
+            "资产大类": None,
+            "Market Cap Last 2 week": _format_billion(gold_prev_b, "USD"),
+            "Market Cap This week": _format_billion(gold_curr_b, "USD"),
+            "Gainer": _format_billion(
+                None if gold_prev_b is None or gold_curr_b is None else gold_curr_b - gold_prev_b,
+                "USD",
+            ),
+        })
 
-    hk_stock_old = _to_billions(stock_caps["HK"]["old"])
-    hk_stock_new = _to_billions(stock_caps["HK"]["new"])
-    rows.append({
-        "区域": "香港",
-        "资产大类": "股票权益",
-        "Market Cap Last 2 week": _format_billion(hk_stock_old, "HKD"),
-        "Market Cap This week": _format_billion(hk_stock_new, "HKD"),
-        "Gainer": _format_billion(
-            None if hk_stock_old is None or hk_stock_new is None else hk_stock_new - hk_stock_old,
-            "HKD",
-        ),
-    })
-
-    gold_prev_b = _to_billions(gold_prev)
-    gold_curr_b = _to_billions(gold_curr)
-    rows.append({
-        "区域": "商品与贵金属（黄金）",
-        "资产大类": None,
-        "Market Cap Last 2 week": _format_billion(gold_prev_b, "USD"),
-        "Market Cap This week": _format_billion(gold_curr_b, "USD"),
-        "Gainer": _format_billion(
-            None if gold_prev_b is None or gold_curr_b is None else gold_curr_b - gold_prev_b,
-            "USD",
-        ),
-    })
-
-    btc_prev_b = _to_billions(btc_prev)
-    btc_curr_b = _to_billions(btc_curr)
-    rows.append({
-        "区域": "数字货币（BTC）",
-        "资产大类": None,
-        "Market Cap Last 2 week": _format_billion(btc_prev_b, "USD"),
-        "Market Cap This week": _format_billion(btc_curr_b, "USD"),
-        "Gainer": _format_billion(
-            None if btc_prev_b is None or btc_curr_b is None else btc_curr_b - btc_prev_b,
-            "USD",
-        ),
-    })
+    if "btc" in selected_modules:
+        btc_prev_b = _to_billions(btc_prev)
+        btc_curr_b = _to_billions(btc_curr)
+        rows.append({
+            "区域": "数字货币（BTC）",
+            "资产大类": None,
+            "Market Cap Last 2 week": _format_billion(btc_prev_b, "USD"),
+            "Market Cap This week": _format_billion(btc_curr_b, "USD"),
+            "Gainer": _format_billion(
+                None if btc_prev_b is None or btc_curr_b is None else btc_curr_b - btc_prev_b,
+                "USD",
+            ),
+        })
 
     df = pd.DataFrame(rows, columns=["区域", "资产大类", "Market Cap Last 2 week", "Market Cap This week", "Gainer"])
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    df.to_excel(OUTPUT_PATH, index=False)
-    print(f"\n整合结果已保存至：{OUTPUT_PATH}")
+    target_output = Path(output_path or CONFIG["output_path"] or OUTPUT_PATH)
+    target_output.parent.mkdir(parents=True, exist_ok=True)
+    df.to_excel(target_output, index=False)
+    print(f"\n整合结果已保存至：{target_output}")
 
 
 if __name__ == "__main__":

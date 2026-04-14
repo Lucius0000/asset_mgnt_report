@@ -13,7 +13,12 @@ env/
 output/
 tmp/
 data/local/
+scripts/data/
+scripts/output/
+scripts/pipelines/output/
 archive/legacy_code/stock_us_cn_hk/mixed_market_report_*.xlsx
+docs/重构前后对比报告.md
+docs/同步到wealth-hunter说明.md
 *.tmp
 *.bak
 *.swp

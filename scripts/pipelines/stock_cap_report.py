@@ -449,14 +449,20 @@ def get_spy_cap(debug = False, progress_callback=None, cancel_check=None):
     return spy_cap
 
 
-def get_all_index_caps(progress_callback=None, cancel_check=None):
+def get_all_index_caps(progress_callback=None, cancel_check=None, selected_markets=None):
     """
     这是用于 asset_stock_index.py 调用的接口，不用于本代码输出，注意维护
     """
-    cn = get_hs300_cap(progress_callback=progress_callback, cancel_check=cancel_check)
-    us = get_spy_cap(progress_callback=progress_callback, cancel_check=cancel_check)
-    hk = get_hsi_cap(progress_callback=progress_callback, cancel_check=cancel_check)
-    return {"CN": cn, "HK": hk, "US": us}
+    normalized = [market.upper() for market in (selected_markets or ["CN", "US", "HK"])]
+    ordered = [market for market in ["CN", "US", "HK"] if market in normalized]
+    results = {}
+    if "CN" in ordered:
+        results["CN"] = get_hs300_cap(progress_callback=progress_callback, cancel_check=cancel_check)
+    if "US" in ordered:
+        results["US"] = get_spy_cap(progress_callback=progress_callback, cancel_check=cancel_check)
+    if "HK" in ordered:
+        results["HK"] = get_hsi_cap(progress_callback=progress_callback, cancel_check=cancel_check)
+    return results
 
 
 def main():

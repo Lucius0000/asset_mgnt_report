@@ -33,6 +33,14 @@ MODULE_OPTIONS: list[tuple[str, str]] = [
     ("crypto", "数字货币"),
 ]
 MODULE_LABELS = {key: label for key, label in MODULE_OPTIONS}
+STOCK_MARKET_OPTIONS: list[tuple[str, str]] = [
+    ("CN", "中国"),
+    ("US", "美国"),
+    ("HK", "香港"),
+]
+STOCK_MARKET_LABELS = {key: label for key, label in STOCK_MARKET_OPTIONS}
+GAINER_MODULE_OPTIONS = list(gainer_entry.GAINER_MODULE_OPTIONS)
+GAINER_MODULE_LABELS = dict(gainer_entry.GAINER_MODULE_LABELS)
 HOME_CARDS = [
     ("main", "主报表工作台", "按模块执行周报主链路，适合日常更新。"),
     ("gainer", "Gainer 工作台", "输入日期与金价，稳定生成跨资产 Gainer 汇总。"),
@@ -331,6 +339,9 @@ def _ensure_state(config) -> None:
         "debug": config.debug,
         "use_proxy": config.use_proxy,
         "main_modules": [key for key, _ in MODULE_OPTIONS],
+        "main_stock_markets": list(main_entry.CONFIG["stock_markets"]),
+        "gainer_modules": [key for key, _ in GAINER_MODULE_OPTIONS],
+        "gainer_stock_markets": [key for key, _ in STOCK_MARKET_OPTIONS],
         "gainer_current_date": default_current_date,
         "gainer_previous_date": default_previous_date,
         "gainer_current_gold_price": "",
@@ -364,6 +375,14 @@ def _restore_gainer_inputs() -> None:
         previous_date = default_previous_date
     st.session_state["gainer_current_date"] = current_date
     st.session_state["gainer_previous_date"] = previous_date
+    selected_modules = [
+        key for key, _ in GAINER_MODULE_OPTIONS if key in st.session_state.get("gainer_modules", [])
+    ]
+    st.session_state["gainer_modules"] = selected_modules or [key for key, _ in GAINER_MODULE_OPTIONS]
+    selected_stock_markets = [
+        key for key, _ in STOCK_MARKET_OPTIONS if key in st.session_state.get("gainer_stock_markets", [])
+    ]
+    st.session_state["gainer_stock_markets"] = selected_stock_markets or [key for key, _ in STOCK_MARKET_OPTIONS]
     st.session_state["gainer_current_gold_price"] = str(
         st.session_state.get("gainer_current_gold_price", "")
     ).strip()
@@ -712,12 +731,23 @@ def _run_main_action() -> None:
     debug = bool(st.session_state["debug"])
     use_proxy = bool(st.session_state["use_proxy"])
     modules = list(st.session_state["main_modules"])
+    stock_markets = list(st.session_state["main_stock_markets"])
+    if "stock_index" in modules and not stock_markets:
+        st.session_state["result"] = {
+            "label": "主报表",
+            "status": "error",
+            "duration": 0.0,
+            "output": "股票权益模块至少需要选择一个股票市场。",
+            "traceback": "",
+        }
+        return
 
     def _job(progress_callback, cancel_check) -> None:
         with _temporary_env(debug, use_proxy):
             main_entry.main(
                 debug=debug,
                 modules=modules,
+                stock_markets=stock_markets,
                 progress_callback=progress_callback,
                 cancel_check=cancel_check,
             )
@@ -726,11 +756,33 @@ def _run_main_action() -> None:
 
 
 def _run_gainer_action() -> None:
+    selected_modules = list(st.session_state["gainer_modules"])
+    if not selected_modules:
+        st.session_state["result"] = {
+            "label": "Gainer",
+            "status": "error",
+            "duration": 0.0,
+            "output": "请至少选择一个 Gainer 子模块。",
+            "traceback": "",
+        }
+        return
+    selected_stock_markets = list(st.session_state["gainer_stock_markets"])
+    if "stocks" in selected_modules and not selected_stock_markets:
+        st.session_state["result"] = {
+            "label": "Gainer",
+            "status": "error",
+            "duration": 0.0,
+            "output": "股票子模块至少需要选择一个股票市场。",
+            "traceback": "",
+        }
+        return
     current_date = _validate_gainer_date("gainer_current_date", "本周末日期（周六）")
     previous_date = _validate_gainer_date("gainer_previous_date", "两周前日期（周六）")
-    current_gold = _parse_gainer_price("gainer_current_gold_price", "本周末黄金价格")
-    previous_gold = _parse_gainer_price("gainer_previous_gold_price", "两周前黄金价格")
-    if None in {current_date, previous_date, current_gold, previous_gold}:
+    current_gold = previous_gold = None
+    if "gold" in selected_modules:
+        current_gold = _parse_gainer_price("gainer_current_gold_price", "本周末黄金价格")
+        previous_gold = _parse_gainer_price("gainer_previous_gold_price", "两周前黄金价格")
+    if current_date is None or previous_date is None or ("gold" in selected_modules and None in {current_gold, previous_gold}):
         return
     if (current_date - previous_date).days != 14:
         st.session_state["result"] = {
@@ -748,13 +800,20 @@ def _run_gainer_action() -> None:
     def _job(progress_callback, cancel_check) -> None:
         with _patched_config(
             gainer_entry,
+            modules=selected_modules,
+            stock_markets=selected_stock_markets,
             current_date=current_date,
             previous_date=previous_date,
             current_gold_price=current_gold,
             previous_gold_price=previous_gold,
         ):
             with _temporary_env(debug, use_proxy):
-                gainer_entry.main(progress_callback=progress_callback, cancel_check=cancel_check)
+                gainer_entry.main(
+                    modules=selected_modules,
+                    stock_markets=selected_stock_markets,
+                    progress_callback=progress_callback,
+                    cancel_check=cancel_check,
+                )
 
     _start_background_job("Gainer", _job)
 
@@ -1039,6 +1098,15 @@ def _render_main_page() -> None:
         key="main_modules",
         format_func=lambda key: f"{MODULE_LABELS[key]} · {key}",
     )
+    st.multiselect(
+        "股票权益市场",
+        options=[key for key, _ in STOCK_MARKET_OPTIONS],
+        default=st.session_state["main_stock_markets"],
+        key="main_stock_markets",
+        format_func=lambda key: f"{STOCK_MARKET_LABELS[key]} · {key}",
+        help="仅对主报表中的“股票权益”模块生效。",
+        disabled="stock_index" not in st.session_state.get("main_modules", []),
+    )
     if st.button("执行主报表", key="run-main", type="primary", use_container_width=True):
         _run_main_action()
     _render_result_panel()
@@ -1047,6 +1115,22 @@ def _render_main_page() -> None:
 def _render_gainer_page() -> None:
     _restore_gainer_inputs()
     _render_workspace_header("Gainer 工作台", "请选择两个周六日期并填写金价，页面会显示步骤进度与日志。")
+    st.multiselect(
+        "Gainer 子模块",
+        options=[key for key, _ in GAINER_MODULE_OPTIONS],
+        default=st.session_state["gainer_modules"],
+        key="gainer_modules",
+        format_func=lambda key: f"{GAINER_MODULE_LABELS[key]} · {key}",
+    )
+    st.multiselect(
+        "股票子模块市场",
+        options=[key for key, _ in STOCK_MARKET_OPTIONS],
+        default=st.session_state["gainer_stock_markets"],
+        key="gainer_stock_markets",
+        format_func=lambda key: f"{STOCK_MARKET_LABELS[key]} · {key}",
+        disabled="stocks" not in st.session_state.get("gainer_modules", []),
+        help="仅在勾选股票子模块时生效。",
+    )
     st.markdown(
         """
         <div class="amr-inline-note">
@@ -1068,8 +1152,19 @@ def _render_gainer_page() -> None:
         help="请选择与本周末日期相差 14 天的周六日期。",
     )
     col3, col4 = st.columns(2)
-    col3.text_input("本周末黄金价格（USD/oz）", key="gainer_current_gold_price", placeholder="例如 2378.42")
-    col4.text_input("两周前黄金价格（USD/oz）", key="gainer_previous_gold_price", placeholder="例如 2314.15")
+    gold_disabled = "gold" not in st.session_state.get("gainer_modules", [])
+    col3.text_input(
+        "本周末黄金价格（USD/oz）",
+        key="gainer_current_gold_price",
+        placeholder="例如 2378.42",
+        disabled=gold_disabled,
+    )
+    col4.text_input(
+        "两周前黄金价格（USD/oz）",
+        key="gainer_previous_gold_price",
+        placeholder="例如 2314.15",
+        disabled=gold_disabled,
+    )
     if st.button("执行 Gainer", key="run-gainer", type="primary", use_container_width=True):
         _run_gainer_action()
     _render_result_panel()

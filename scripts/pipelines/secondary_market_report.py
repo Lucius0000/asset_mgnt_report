@@ -2,33 +2,40 @@
 # -*- coding: utf-8 -*-
 
 import os
-import yfinance as yf
+from pathlib import Path
+import sys
+import time
+
 import numpy as np
-from datetime import datetime, timedelta
 import pandas as pd
+import yfinance as yf
+from dateutil.relativedelta import relativedelta  # 需要安装: pip install python-dateutil
+from datetime import datetime, timedelta
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils.dataframe import dataframe_to_rows
-from dateutil.relativedelta import relativedelta  # 需要安装: pip install python-dateutil
-import time
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.asset_mgnt_report.config.defaults import build_app_config
 from src.asset_mgnt_report.metrics.annualization import annualized_return_from_returns
 from src.asset_mgnt_report.metrics.sharpe import sharpe_ratio as shared_sharpe_ratio
 from src.asset_mgnt_report.metrics.volatility import annualized_volatility
 
-os.environ['http_proxy'] = 'http://127.0.0.1:7890'
-os.environ['https_proxy'] = 'http://127.0.0.1:7890'
+APP_CONFIG = build_app_config(project_root=PROJECT_ROOT)
 
-'''
+INTRO_TEXT = """
 由于传入 yfinance 的 end_date 为开区间，需要选择周六为 end_date，方可获取周五数据;
 且由于时区的影响，美股数据推荐使用周日为 end_date;
 由于是按照收盘价计算两周变动的，所以应该是取两周前的周五收盘价与当周周五收盘价比较、计算。
 综上，start_date 应为两周前周五，end_date 应为当周周日，如 10.24 - 11.09
-'''
-print('''
-      一般需要选择手动日期模式，
-      start_date 应为两周前周五，end_date 应为当周周日，如 10.24 - 11.09
-      ''')
+"""
+
+
+def _print_intro() -> None:
+    print(INTRO_TEXT)
 
 def adjust_date_for_market(date, symbol):
     """
@@ -286,78 +293,96 @@ def get_default_dates():
     return start_date, end_date
 
 
-# 选择市场模式
-print("选择市场模式：")
-print("1. 美股模式")
-print("2. 中港股模式")
-print("3. 混合模式（美股+中港股）")
+def resolve_market_selection(market_mode: str | None = None) -> tuple[dict[str, str], dict[str, list[str]], str, str]:
+    normalized = (market_mode or "").strip().lower()
+    mapping = {
+        "1": "us",
+        "us": "us",
+        "美股": "us",
+        "2": "china_hk",
+        "china_hk": "china_hk",
+        "中港股": "china_hk",
+        "3": "mixed",
+        "mixed": "mixed",
+        "混合": "mixed",
+    }
+    selected = mapping.get(normalized)
+    if selected is None:
+        print("选择市场模式：")
+        print("1. 美股模式")
+        print("2. 中港股模式")
+        print("3. 混合模式（美股+中港股）")
+        selected = mapping.get(input("请选择 (1、2 或 3): ").strip(), "mixed")
 
-market_choice = input("请选择 (1、2 或 3): ").strip()
+    if selected == "us":
+        return us_market_symbols, us_categories, "美股", "us_market_report"
+    if selected == "china_hk":
+        return china_hk_market_symbols, china_hk_categories, "中港股", "china_hk_market_report"
+    return {**us_market_symbols, **china_hk_market_symbols}, {**us_categories, **china_hk_categories}, "混合", "mixed_market_report"
 
-market_type = ""
-if market_choice == "1":
-    market_symbols = us_market_symbols
-    categories = us_categories
-    market_type = "美股"
-    report_prefix = "us_market_report"
-elif market_choice == "2":
-    market_symbols = china_hk_market_symbols
-    categories = china_hk_categories
-    market_type = "中港股"
-    report_prefix = "china_hk_market_report"
-else:
-    # 混合模式
-    market_symbols = {**us_market_symbols, **china_hk_market_symbols}
-    categories = {**us_categories, **china_hk_categories}
-    market_type = "混合"
-    report_prefix = "mixed_market_report"
 
-print(f"已选择{market_type}模式")
+def resolve_date_selection(
+    use_default_dates: bool | None = None,
+    start_date: datetime | str | None = None,
+    end_date: datetime | str | None = None,
+) -> tuple[datetime, datetime]:
+    def _coerce(value: datetime | str | None) -> datetime | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        return datetime.fromisoformat(str(value))
 
-# 获取日期
-print("选择日期输入方式：")
-print("1. 使用智能默认日期（上周五→本周六）")
-print("2. 手动输入日期")
+    start = _coerce(start_date)
+    end = _coerce(end_date)
 
-choice = input("请选择 (1 或 2): ").strip()
+    if start is not None and end is not None:
+        if start >= end:
+            raise ValueError("开始日期必须早于结束日期。")
+        return start, end
 
-if choice == "1":
-    start_date, end_date = get_default_dates()
-    weekday_names = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
-    start_weekday = weekday_names[start_date.weekday()]
-    end_weekday = weekday_names[end_date.weekday()]
-    print(
-        f"使用智能默认日期：{start_date.strftime('%Y-%m-%d')}({start_weekday}) 到 {end_date.strftime('%Y-%m-%d')}({end_weekday})")
-else:
-    print("请手动输入日期")
-    start_date = get_date_input("开始日期")
-    end_date = get_date_input("结束日期")
+    if use_default_dates is True:
+        return get_default_dates()
 
-    # 改进的日期验证逻辑：更加用户友好
-    while start_date >= end_date:
+    if use_default_dates is False:
+        print("请手动输入日期")
+        start = get_date_input("开始日期")
+        end = get_date_input("结束日期")
+    else:
+        print("选择日期输入方式：")
+        print("1. 使用智能默认日期（上周五→本周六）")
+        print("2. 手动输入日期")
+        choice = input("请选择 (1 或 2): ").strip()
+        if choice == "1":
+            start, end = get_default_dates()
+            weekday_names = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+            print(
+                f"使用智能默认日期：{start.strftime('%Y-%m-%d')}({weekday_names[start.weekday()]}) 到 {end.strftime('%Y-%m-%d')}({weekday_names[end.weekday()]})"
+            )
+            return start, end
+        print("请手动输入日期")
+        start = get_date_input("开始日期")
+        end = get_date_input("结束日期")
+
+    while start >= end:
         print("错误：开始日期必须早于结束日期！")
-        print(f"当前输入：开始日期 {start_date.strftime('%Y-%m-%d')}，结束日期 {end_date.strftime('%Y-%m-%d')}")
-
-        # 询问用户要修改哪个日期
+        print(f"当前输入：开始日期 {start.strftime('%Y-%m-%d')}，结束日期 {end.strftime('%Y-%m-%d')}")
         print("请选择要修改的日期：")
         print("1. 修改开始日期")
         print("2. 修改结束日期")
         print("3. 重新输入全部日期")
-
         modify_choice = input("请选择 (1、2 或 3): ").strip()
-
         if modify_choice == "1":
-            start_date = get_date_input("开始日期")
+            start = get_date_input("开始日期")
         elif modify_choice == "2":
-            end_date = get_date_input("结束日期")
+            end = get_date_input("结束日期")
         else:
-            # 选择3或其他：重新输入全部
-            start_date = get_date_input("开始日期")
-            end_date = get_date_input("结束日期")
+            start = get_date_input("开始日期")
+            end = get_date_input("结束日期")
 
-    # 显示最终确认的日期
-    print(f"✓ 确认日期范围：{start_date.strftime('%Y-%m-%d')} 到 {end_date.strftime('%Y-%m-%d')}")
-    print(f"  分析时间跨度：{(end_date - start_date).days} 天")
+    print(f"✓ 确认日期范围：{start.strftime('%Y-%m-%d')} 到 {end.strftime('%Y-%m-%d')}")
+    print(f"  分析时间跨度：{(end - start).days} 天")
+    return start, end
 
 
 def get_weekly_data(symbols, start_date, end_date):
@@ -896,7 +921,7 @@ def get_category_for_symbol(symbol, categories):
     return "其他"
 
 
-def export_to_excel_by_category(data, categories, report_prefix, market_type):
+def export_to_excel_by_category(data, categories, report_prefix, market_type, end_date):
     """将数据按分类导出为Excel文件，并设置单元格样式和颜色填充"""
 
     # 创建工作簿
@@ -1072,12 +1097,29 @@ def export_to_excel_by_category(data, categories, report_prefix, market_type):
     else:
         apply_gradient_fill(ws_summary, skip_rows=1, skip_columns=1)  # 跳过分类列
 
-    filename = f'{report_prefix}_{end_date.strftime("%Y%m%d")}.xlsx'
+    filename = APP_CONFIG.output_dir / f'{report_prefix}_{end_date.strftime("%Y%m%d")}.xlsx'
     wb.save(filename)
     print(f"{market_type}分类报告已保存为: {filename}")
+    return filename
 
 
-if __name__ == "__main__":
+def main(
+    market_mode: str | None = None,
+    use_default_dates: bool | None = None,
+    start_date: datetime | str | None = None,
+    end_date: datetime | str | None = None,
+    progress_callback=None,
+    cancel_check=None,
+) -> Path | None:
+    del progress_callback, cancel_check
+    if market_mode is None and use_default_dates is None and start_date is None and end_date is None:
+        _print_intro()
+    market_symbols, categories, market_type, report_prefix = resolve_market_selection(market_mode)
+    start_date, end_date = resolve_date_selection(
+        use_default_dates=use_default_dates,
+        start_date=start_date,
+        end_date=end_date,
+    )
     print(f"数据日期范围：{start_date.strftime('%Y-%m-%d')} 到 {end_date.strftime('%Y-%m-%d')}")
     print(f"将分析以下 {len(market_symbols)} 个{market_type}标的：")
 
@@ -1100,7 +1142,7 @@ if __name__ == "__main__":
 
     # 导出Excel文件
     if results:
-        export_to_excel_by_category(results, categories, report_prefix, market_type)
+        output_path = export_to_excel_by_category(results, categories, report_prefix, market_type, end_date)
         print("数据处理完毕！")
         print(f"成功分析了 {len(results)} 个标的")
 
@@ -1108,5 +1150,11 @@ if __name__ == "__main__":
         for category, symbols in categories.items():
             count = sum(1 for symbol in symbols if symbol in results)
             print(f"  {category}: {count}/{len(symbols)} 个标的")
+        return output_path
     else:
         print("没有获取到任何数据，请检查网络连接和符号列表。")
+        return None
+
+
+if __name__ == "__main__":
+    main()

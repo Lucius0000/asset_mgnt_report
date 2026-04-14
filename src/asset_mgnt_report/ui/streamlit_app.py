@@ -16,6 +16,7 @@ import streamlit as st
 from scripts import gainer as gainer_entry
 from scripts import main as main_entry
 from scripts import overall as overall_entry
+from scripts.pipelines import secondary_market_report as secondary_market_entry
 from scripts.validation import validate_outputs
 from src.asset_mgnt_report.config.defaults import build_app_config
 from src.asset_mgnt_report.services.progress import JobCancelledError
@@ -27,6 +28,7 @@ MODULE_OPTIONS: list[tuple[str, str]] = [
     ("interest_rate", "利率"),
     ("carry_trade", "利差"),
     ("stock_index", "股票权益"),
+    ("secondary_market", "二级市场"),
     ("currency", "汇率"),
     ("precious_metals", "商品与贵金属"),
     ("bonds", "债券固收"),
@@ -44,6 +46,7 @@ GAINER_MODULE_LABELS = dict(gainer_entry.GAINER_MODULE_LABELS)
 HOME_CARDS = [
     ("main", "主报表工作台", "按模块执行周报主链路，适合日常更新。"),
     ("gainer", "Gainer 工作台", "输入日期与金价，稳定生成跨资产 Gainer 汇总。"),
+    ("secondary_market", "二级市场工作台", "单独运行中港股 / 美股 / 混合市场两周报表。"),
     ("overall", "整体表工作台", "处理整体.xlsx 并输出整体_processed.xlsx。"),
     ("validation", "校验工作台", "对 main / codex 输出做回归对比，更新对比报告。"),
 ]
@@ -51,9 +54,16 @@ WORKSPACE_LABELS = {
     "home": "主页",
     "main": "主报表",
     "gainer": "Gainer",
+    "secondary_market": "二级市场",
     "overall": "整体表",
     "validation": "全量校验",
 }
+SECONDARY_MARKET_MODE_OPTIONS: list[tuple[str, str]] = [
+    ("us", "美股"),
+    ("china_hk", "中港股"),
+    ("mixed", "混合"),
+]
+SECONDARY_MARKET_MODE_LABELS = {key: label for key, label in SECONDARY_MARKET_MODE_OPTIONS}
 _JOB_LOCK = Lock()
 _JOB_REGISTRY: dict[str, dict[str, object]] = {}
 
@@ -313,7 +323,7 @@ def _inject_styles() -> None:
         unsafe_allow_html=True,
     )
 def _normalize_workspace(workspace: str | None) -> str:
-    if workspace in {"home", "main", "gainer", "overall", "validation"}:
+    if workspace in {"home", "main", "gainer", "secondary_market", "overall", "validation"}:
         return workspace
     return "home"
 
@@ -330,10 +340,16 @@ def _current_week_saturday(reference: date | None = None) -> date:
     return gainer_entry.default_current_saturday(reference).date()
 
 
+def _default_secondary_market_dates() -> tuple[date, date]:
+    start_dt, end_dt = secondary_market_entry.get_default_dates()
+    return start_dt.date(), end_dt.date()
+
+
 def _ensure_state(config) -> None:
     overall_defaults = _default_overall_paths(config)
     default_current_date = _current_week_saturday()
     default_previous_date = default_current_date - timedelta(days=14)
+    secondary_start_date, secondary_end_date = _default_secondary_market_dates()
     defaults = {
         "active_workspace": _normalize_workspace(os.getenv("AMR_ACTIVE_WORKSPACE")),
         "debug": config.debug,
@@ -346,6 +362,10 @@ def _ensure_state(config) -> None:
         "gainer_previous_date": default_previous_date,
         "gainer_current_gold_price": "",
         "gainer_previous_gold_price": "",
+        "secondary_market_mode": "mixed",
+        "secondary_use_default_dates": True,
+        "secondary_start_date": secondary_start_date,
+        "secondary_end_date": secondary_end_date,
         **overall_defaults,
         "result": None,
         "active_job_id": None,
@@ -818,6 +838,46 @@ def _run_gainer_action() -> None:
     _start_background_job("Gainer", _job)
 
 
+def _run_secondary_market_action() -> None:
+    debug = bool(st.session_state["debug"])
+    use_proxy = bool(st.session_state["use_proxy"])
+    market_mode = st.session_state.get("secondary_market_mode", "mixed")
+    use_default_dates = bool(st.session_state.get("secondary_use_default_dates", True))
+    start_date = st.session_state.get("secondary_start_date")
+    end_date = st.session_state.get("secondary_end_date")
+    if not use_default_dates:
+        if not isinstance(start_date, date) or not isinstance(end_date, date):
+            st.session_state["result"] = {
+                "label": "二级市场",
+                "status": "error",
+                "duration": 0.0,
+                "output": "请先选择有效的开始和结束日期。",
+                "traceback": "",
+            }
+            return
+        if start_date >= end_date:
+            st.session_state["result"] = {
+                "label": "二级市场",
+                "status": "error",
+                "duration": 0.0,
+                "output": "开始日期必须早于结束日期。",
+                "traceback": "",
+            }
+            return
+
+    def _job(progress_callback, cancel_check) -> None:
+        del progress_callback, cancel_check
+        with _temporary_env(debug, use_proxy):
+            secondary_market_entry.main(
+                market_mode=market_mode,
+                use_default_dates=use_default_dates,
+                start_date=start_date.isoformat() if isinstance(start_date, date) else None,
+                end_date=end_date.isoformat() if isinstance(end_date, date) else None,
+            )
+
+    _start_background_job("二级市场", _job)
+
+
 def _run_overall_action(config) -> None:
     defaults = _default_overall_paths(config)
     input_path = Path(_sanitize_text_path(st.session_state.get("overall_input_path_text"), defaults["overall_input_path_text"]))
@@ -1170,6 +1230,24 @@ def _render_gainer_page() -> None:
     _render_result_panel()
 
 
+def _render_secondary_market_page() -> None:
+    _render_workspace_header("二级市场工作台", "单独运行美股 / 中港股 / 混合二级市场两周报表。")
+    st.selectbox(
+        "市场模式",
+        options=[key for key, _ in SECONDARY_MARKET_MODE_OPTIONS],
+        key="secondary_market_mode",
+        format_func=lambda key: f"{SECONDARY_MARKET_MODE_LABELS[key]} · {key}",
+    )
+    st.checkbox("使用智能默认日期", key="secondary_use_default_dates")
+    date_disabled = bool(st.session_state.get("secondary_use_default_dates", True))
+    col1, col2 = st.columns(2)
+    col1.date_input("开始日期", key="secondary_start_date", disabled=date_disabled)
+    col2.date_input("结束日期", key="secondary_end_date", disabled=date_disabled)
+    if st.button("执行二级市场报表", key="run-secondary-market", type="primary", use_container_width=True):
+        _run_secondary_market_action()
+    _render_result_panel()
+
+
 def _render_overall_page(config) -> None:
     _restore_overall_paths(config)
     _render_workspace_header("整体表工作台", "处理整体.xlsx，并输出处理后的总表与日志。")
@@ -1217,6 +1295,8 @@ def render_app() -> None:
         _render_main_page()
     elif active_workspace == "gainer":
         _render_gainer_page()
+    elif active_workspace == "secondary_market":
+        _render_secondary_market_page()
     elif active_workspace == "overall":
         _render_overall_page(config)
     elif active_workspace == "validation":

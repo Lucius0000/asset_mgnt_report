@@ -1,4 +1,5 @@
 from datetime import date
+from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
@@ -6,7 +7,7 @@ from src.asset_mgnt_report.config.defaults import build_app_config
 from src.asset_mgnt_report.ui import streamlit_app
 
 
-APP_FILE = "scripts/web_ui.py"
+APP_FILE = str(Path(__file__).resolve().parents[1] / "scripts" / "web_ui.py")
 
 
 def _run_page(page: str | None = None) -> AppTest:
@@ -27,6 +28,7 @@ def test_web_ui_home_renders_with_proxy_enabled() -> None:
     rendered_markdown = "\n".join(markdown.value for markdown in at.markdown)
     assert "主报表工作台" in rendered_markdown
     assert "Gainer 工作台" in rendered_markdown
+    assert "二级市场工作台" in rendered_markdown
     assert any(button.label == "打开 主报表工作台" for button in at.button)
 
 
@@ -41,6 +43,17 @@ def test_home_button_navigates_to_main_workspace() -> None:
     assert len(at.multiselect) == 2
     assert at.multiselect[0].label == "主报表模块"
     assert at.multiselect[1].label == "股票权益市场"
+
+
+def test_home_button_navigates_to_secondary_market_workspace() -> None:
+    at = _run_page()
+
+    next(button for button in at.button if button.label == "打开 二级市场工作台").click().run()
+
+    assert not at.exception
+    assert any(button.label == "返回概览" for button in at.button)
+    assert any(button.label == "执行二级市场报表" for button in at.button)
+    assert at.selectbox[0].label == "市场模式"
 
 
 def test_gainer_page_uses_calendar_inputs_and_shows_lbma_hint() -> None:
@@ -236,4 +249,42 @@ def test_run_gainer_action_passes_selected_modules_and_markets(monkeypatch) -> N
     finally:
         streamlit_app._start_background_job = original_start
         streamlit_app.gainer_entry.main = original_gainer
+        streamlit_app.st.session_state = original_state
+
+
+def test_run_secondary_market_action_passes_selected_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    fake_state = {
+        "debug": False,
+        "use_proxy": True,
+        "secondary_market_mode": "china_hk",
+        "secondary_use_default_dates": False,
+        "secondary_start_date": date(2026, 4, 3),
+        "secondary_end_date": date(2026, 4, 18),
+        "result": None,
+        "active_job_id": None,
+    }
+    original_state = streamlit_app.st.session_state
+    original_start = streamlit_app._start_background_job
+    original_secondary = streamlit_app.secondary_market_entry.main
+    streamlit_app.st.session_state = fake_state
+
+    def fake_start_background_job(label, callback):
+        callback(lambda _event: None, lambda: False)
+        fake_state["result"] = {"label": label, "status": "success"}
+
+    def fake_secondary_main(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(streamlit_app, "_start_background_job", fake_start_background_job)
+    monkeypatch.setattr(streamlit_app.secondary_market_entry, "main", fake_secondary_main)
+    try:
+        streamlit_app._run_secondary_market_action()
+        assert captured["market_mode"] == "china_hk"
+        assert captured["use_default_dates"] is False
+        assert captured["start_date"] == "2026-04-03"
+        assert captured["end_date"] == "2026-04-18"
+    finally:
+        streamlit_app._start_background_job = original_start
+        streamlit_app.secondary_market_entry.main = original_secondary
         streamlit_app.st.session_state = original_state

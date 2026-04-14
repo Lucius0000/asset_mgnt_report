@@ -13,15 +13,27 @@ import yfinance as yf
 from tqdm import tqdm
 import logging
 from datetime import datetime
+from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.asset_mgnt_report.config.defaults import build_app_config
 from src.asset_mgnt_report.services.progress import emit_progress, ensure_not_cancelled
 
 os.environ['http_proxy'] = 'http://127.0.0.1:7890'
 os.environ['https_proxy'] = 'http://127.0.0.1:7890'
 
+APP_CONFIG = build_app_config(project_root=PROJECT_ROOT)
+SEED_DATA_DIR = APP_CONFIG.seed_data_dir
+RAW_OUTPUT_DIR = APP_CONFIG.raw_output_dir
+
 
 # 日志初始化
-os.makedirs("output/raw_data", exist_ok=True)
-LOG_FILE = "output/raw_data/yf_marketcap_log.txt"
+RAW_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = RAW_OUTPUT_DIR / "yf_marketcap_log.txt"
 logging.basicConfig(
     filename=LOG_FILE,
     filemode="a",
@@ -154,8 +166,8 @@ def get_hs300_cap(progress_callback=None, cancel_check=None):
         )
 
     # 读取本地表格
-    file_path = "data/seeds/000300cons.xls"
-    if not os.path.exists(file_path):
+    file_path = SEED_DATA_DIR / "000300cons.xls"
+    if not file_path.exists():
         raise FileNotFoundError(f"未找到文件 {file_path}，请检查文件路径。")
 
     # 读取并确保成分代码为字符串
@@ -211,8 +223,8 @@ def get_hs300_cap(progress_callback=None, cancel_check=None):
         result_df = result_df.sort_values(by="总市值", ascending=False)
 
     # 保存
-    os.makedirs("output/raw_data", exist_ok=True)
-    result_df.to_excel("output/raw_data/沪深300_成分股市值明细.xlsx", index=False)
+    RAW_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    result_df.to_excel(RAW_OUTPUT_DIR / "沪深300_成分股市值明细.xlsx", index=False)
 
     # —— 日志：记录方法统计 —— 
     method_counts = caps_df["method"].value_counts().to_dict()
@@ -230,7 +242,7 @@ def get_hsi_cap(progress_callback=None, cancel_check=None):
     需下载excel格式，放置在data文件夹下
     '''
     # 读取文件（仅作“成分股名录”，不再使用表内“市值”列）
-    files = glob.glob(os.path.join("data", "seeds", "AASTOCKS_Export*.xlsx"))
+    files = glob.glob(str(SEED_DATA_DIR / "AASTOCKS_Export*.xlsx"))
     if not files:
         raise FileNotFoundError("未找到匹配的 AASTOCKS_Export*.xlsx 文件")
     file_path = max(files, key=os.path.getmtime)
@@ -286,8 +298,8 @@ def get_hsi_cap(progress_callback=None, cancel_check=None):
     result_df = df[cols].sort_values(by="市值（B HKD）", ascending=False)
 
     # 保存结果
-    os.makedirs("output/raw_data", exist_ok=True)
-    result_df.to_excel("output/raw_data/恒生指数成分股市值明细.xlsx", index=False)
+    RAW_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    result_df.to_excel(RAW_OUTPUT_DIR / "恒生指数成分股市值明细.xlsx", index=False)
 
     # —— 日志：记录方法统计 —— 
     method_counts = caps_df["method"].value_counts().to_dict()
@@ -338,10 +350,10 @@ def get_spy_cap(debug = False, progress_callback=None, cancel_check=None):
 
     # 初始化路径
     sp500_url = "https://datahub.io/core/s-and-p-500-companies/r/constituents.csv"
-    local_backup = "data/seeds/constituents.csv"
-    raw_data_dir = "output/raw_data"
-    os.makedirs("data/seeds", exist_ok=True)
-    os.makedirs(raw_data_dir, exist_ok=True)
+    local_backup = SEED_DATA_DIR / "constituents.csv"
+    raw_data_dir = RAW_OUTPUT_DIR
+    SEED_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    raw_data_dir.mkdir(parents=True, exist_ok=True)
 
     # 获取标普500成分股列表
     def get_sp500_df(url, backup_path):
@@ -352,7 +364,7 @@ def get_spy_cap(debug = False, progress_callback=None, cancel_check=None):
                 f.write(response.text)
             return pd.read_csv(StringIO(response.text))
         except Exception:
-            if os.path.exists(backup_path):
+            if Path(backup_path).exists():
                 return pd.read_csv(backup_path)
             else:
                 raise RuntimeError("无法获取 S&P500 成分股列表")
@@ -379,7 +391,7 @@ def get_spy_cap(debug = False, progress_callback=None, cancel_check=None):
     )
     caps_df.rename(columns={"market_cap": "MKT_CAP_PARSED"}, inplace=True)
     # 写盘原始
-    caps_df.to_excel(os.path.join(raw_data_dir, "sp500_yf_market_caps.xlsx"), index=False)
+    caps_df.to_excel(raw_data_dir / "sp500_yf_market_caps.xlsx", index=False)
 
     # 匹配与落盘（尽量维持原字段与输出节奏）
     final_df = caps_df.copy()
@@ -410,7 +422,7 @@ def get_spy_cap(debug = False, progress_callback=None, cancel_check=None):
             null_stats[label] = count
 
             if count > 0:
-                invalid_df.to_excel(f"output/raw_data/invalid_mktcap_{label}.xlsx", index=False)
+                invalid_df.to_excel(RAW_OUTPUT_DIR / f"invalid_mktcap_{label}.xlsx", index=False)
 
         except Exception:
             null_stats[label] = -1
@@ -421,9 +433,9 @@ def get_spy_cap(debug = False, progress_callback=None, cancel_check=None):
     # 总市值估算
     total_market_cap = pd.to_numeric(final_df["MKT_CAP_PARSED"], errors="coerce").sum()
 
-    final_df.to_excel("output/raw_data/merged_us_sp500_market_cap.xlsx", index=False)
+    final_df.to_excel(RAW_OUTPUT_DIR / "merged_us_sp500_market_cap.xlsx", index=False)
 
-    summary_path = "output/raw_data/summary.txt"
+    summary_path = RAW_OUTPUT_DIR / "summary.txt"
     with open(summary_path, "w", encoding="utf-8") as f:
         f.write(f"标普500市值估算汇总\n")
         f.write(f"--------------------------\n")

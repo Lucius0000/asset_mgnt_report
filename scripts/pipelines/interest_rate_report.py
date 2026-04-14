@@ -16,15 +16,19 @@ import matplotlib.dates as mdates
 import warnings
 import requests
 
+from src.asset_mgnt_report.config.defaults import build_app_config
+
 warnings.filterwarnings("ignore")
+
+APP_CONFIG = build_app_config()
 
 # ----------------------------
 # 日志配置：文件(仅debug=True) + 控制台
 # ----------------------------
 def _setup_logger(debug: bool):
-    os.makedirs("output", exist_ok=True)
+    APP_CONFIG.output_dir.mkdir(parents=True, exist_ok=True)
     if debug:
-        os.makedirs("output/raw_data", exist_ok=True)
+        APP_CONFIG.raw_output_dir.mkdir(parents=True, exist_ok=True)
 
     logger = logging.getLogger("interest_rate")
     logger.handlers = []
@@ -38,7 +42,7 @@ def _setup_logger(debug: bool):
 
     # 文件日志仅在 debug=True 时启用
     if debug:
-        fh = logging.FileHandler("output/raw_data/interest_rate.log", encoding="utf-8")
+        fh = logging.FileHandler(APP_CONFIG.raw_output_dir / "interest_rate.log", encoding="utf-8")
         fh.setLevel(logging.INFO)
         fh.setFormatter(fmt)
         logger.addHandler(fh)
@@ -159,7 +163,8 @@ def get_interest_rate_data():
 # ----------------------------
 # 原始数据保存
 # ----------------------------
-def save_raw_interest_data(rate_data, output_path="output/raw_data"):
+def save_raw_interest_data(rate_data, output_path=None):
+    output_path = output_path or APP_CONFIG.raw_output_dir
     os.makedirs(output_path, exist_ok=True)
     for key, df in rate_data.items():
         file_path = os.path.join(output_path, f"interest_rate_{key}.xlsx")
@@ -428,7 +433,7 @@ def map_interest_format(row):
 # ----------------------------
 # 近N年走势图
 # ----------------------------
-def plot_interest_rate_trend(rate_data, output_path="output", years=2):
+def plot_interest_rate_trend(rate_data, output_path=None, years=2):
     # 字体与样式（仅用于渲染美观，不影响计算）
     plt.rcParams["font.family"] = "SimHei"
     plt.rcParams["axes.unicode_minus"] = False
@@ -474,6 +479,7 @@ def plot_interest_rate_trend(rate_data, output_path="output", years=2):
     plt.legend(fontsize=10)
     plt.tight_layout()
 
+    output_path = output_path or APP_CONFIG.output_dir
     os.makedirs(output_path, exist_ok=True)
     out_path = os.path.join(output_path, f"interest_rate_trend_{years}y.png")
     plt.savefig(out_path, dpi=300)
@@ -496,7 +502,7 @@ def generate_report():
 
     # 在 debug=True 模式下，既写文件也把“映射后的指标表”写入日志
     try:
-        xlsx_path = "output/interest_rate_metrics.xlsx"
+        xlsx_path = APP_CONFIG.output_dir / "interest_rate_metrics.xlsx"
         formatted_rate_df.to_excel(xlsx_path, index=False)
         logger.info("已保存指标表：%s", xlsx_path)
     except Exception as e:

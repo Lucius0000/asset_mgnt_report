@@ -13,6 +13,8 @@ import logging
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
+from src.asset_mgnt_report.config.defaults import build_app_config
+
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -20,6 +22,8 @@ warnings.filterwarnings("ignore")
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+APP_CONFIG = build_app_config()
 
 
 def get_currency_rate_data():
@@ -55,7 +59,8 @@ def get_currency_rate_data():
         return None
 
 
-def save_raw_currency_data(data_dict, output_path='output/raw_data'):
+def save_raw_currency_data(data_dict, output_path=None):
+    output_path = output_path or APP_CONFIG.raw_output_dir
     os.makedirs(output_path, exist_ok=True)
     for key, df in data_dict.items():
         file_path = os.path.join(output_path, f"{key}.xlsx")
@@ -121,7 +126,8 @@ def calculate_currency_metrics(data_dict):
     return pd.DataFrame(results)
 
 
-def plot_currency_rates(data_dict, output_path='output', years=2):
+def plot_currency_rates(data_dict, output_path=None, years=2):
+    output_path = output_path or APP_CONFIG.output_dir
     """
     可视化近 N 年货币利率走势
     """
@@ -185,7 +191,8 @@ def calculate_currency_spreads(data_dict):
         logger.error(f"计算货币利差出错: {str(e)}")
         return None
 
-def plot_currency_spreads(spread_df, output_path='output'):
+def plot_currency_spreads(spread_df, output_path=None):
+    output_path = output_path or APP_CONFIG.output_dir
     """
     绘制货币利差时间序列图
     """

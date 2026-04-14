@@ -15,6 +15,8 @@ import matplotlib.dates as mdates
 import akshare as ak
 import yfinance as yf
 
+from src.asset_mgnt_report.config.defaults import build_app_config
+
 # 配置日志
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -30,8 +32,9 @@ YAHOO_SYMBOLS = {
 }
 
 # 保存路径
-RAW_DATA_DIR = "output/raw_data"
-os.makedirs(RAW_DATA_DIR, exist_ok=True)
+APP_CONFIG = build_app_config()
+RAW_DATA_DIR = APP_CONFIG.raw_output_dir
+RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @contextmanager
@@ -439,7 +442,7 @@ def plot_trend(data_dict, years=2):
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.xticks(rotation=45); plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
     plt.legend(); plt.tight_layout()
-    plt.savefig("output/fx_trend_2y.png", dpi=300)
+    plt.savefig(APP_CONFIG.output_dir / "fx_trend_2y.png", dpi=300)
     plt.close()
 
 def main(debug = False):
@@ -470,7 +473,7 @@ def main(debug = False):
             metrics_df = metrics_df.drop(columns=drop_cols, errors='ignore')
     except Exception:
         pass
-    metrics_df.to_excel("output/fx_metrics.xlsx", index=False)
+    metrics_df.to_excel(APP_CONFIG.output_dir / "fx_metrics.xlsx", index=False)
     print(metrics_df)
 
     # 可视化

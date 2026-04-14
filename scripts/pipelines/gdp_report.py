@@ -15,15 +15,18 @@ import matplotlib.dates as mdates
 from fredapi import Fred
 import requests
 
+from src.asset_mgnt_report.config.defaults import build_app_config
+
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # 路径设置
-OUTPUT_DIR = "output"
-RAW_DIR = os.path.join(OUTPUT_DIR, "raw_data")
-os.makedirs(RAW_DIR, exist_ok=True)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+APP_CONFIG = build_app_config()
+OUTPUT_DIR = APP_CONFIG.output_dir
+RAW_DIR = APP_CONFIG.raw_output_dir
+RAW_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # GDP总量函数
 def convert_quarter_str_to_date(qtr_str):
@@ -138,8 +141,8 @@ def calculate_annualized_gdp(region: str, gdp_df: pd.DataFrame, yoy_df: pd.DataF
                     df.loc[i, 'gdp'] = val - prev
         
             # 保存季度差分数据
-            os.makedirs("output", exist_ok=True)
-            df[['quarter', '国内生产总值-绝对值', 'gdp']].to_excel("output/raw_data/CN_GDP_quarterly_converted.xlsx", index=False)
+            APP_CONFIG.output_dir.mkdir(parents=True, exist_ok=True)
+            df[['quarter', '国内生产总值-绝对值', 'gdp']].to_excel(APP_CONFIG.raw_output_dir / "CN_GDP_quarterly_converted.xlsx", index=False)
         
             latest_4 = df[df['gdp'].notna()].iloc[-4:]
             total = latest_4['gdp'].sum() / 10
@@ -592,7 +595,7 @@ def convert_hk_date(date_str):
         return f"{year}-{month}-{day}"
     return date_str
 
-def plot_gdp_trend(gdp_data, gdp_metrics, output_path='output/gdp_trend_2y.png', debug=False):
+def plot_gdp_trend(gdp_data, gdp_metrics, output_path=None, debug=False):
     """
     绘制近两年中美港GDP同比增速走势图，并添加各国10年CAGR基准线
     """
@@ -658,11 +661,12 @@ def plot_gdp_trend(gdp_data, gdp_metrics, output_path='output/gdp_trend_2y.png',
     fig.autofmt_xdate()
 
     plt.tight_layout()
-    plt.savefig(output_path, dpi=300)
+    plt.savefig(output_path or (APP_CONFIG.output_dir / "gdp_trend_2y.png"), dpi=300)
     plt.close()
 
     if debug:
-        print(f"近两年GDP趋势图保存至: {output_path}")
+        resolved_output = output_path or (APP_CONFIG.output_dir / "gdp_trend_2y.png")
+        print(f"近两年GDP趋势图保存至: {resolved_output}")
 
 
 
@@ -685,14 +689,14 @@ def generate_report(debug=False):
     print(gdp_metrics)
     
 
-    output_path = 'output'
+    output_path = APP_CONFIG.output_dir
     os.makedirs(output_path, exist_ok=True)
     
     # 保存 GDP 原始数据
-    raw_data_path = os.path.join(output_path, 'raw_data')
+    raw_data_path = APP_CONFIG.raw_output_dir
     os.makedirs(raw_data_path, exist_ok=True)
     for name, df in gdp_data.items():
-        df.to_excel(os.path.join(raw_data_path, f"gdp_{name}.xlsx"), index=False)
+        df.to_excel(raw_data_path / f"gdp_{name}.xlsx", index=False)
 
     # 格式化 GDP 输出
     def format_date(dt):
@@ -715,7 +719,7 @@ def generate_report(debug=False):
         })
 
     formatted_df = gdp_metrics.apply(format_row, axis=1)
-    formatted_df.to_excel(f"{output_path}/gdp_metrics.xlsx", index=False)
+    formatted_df.to_excel(output_path / "gdp_metrics.xlsx", index=False)
     
     # plot_gdp_trend(gdp_data, gdp_metrics, output_path='output/gdp_trend.png', debug=False)
 

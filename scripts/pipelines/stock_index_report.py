@@ -11,17 +11,26 @@ import logging
 from typing import Dict, Optional, Tuple, Any
 from dataclasses import dataclass
 import os
+from pathlib import Path
+import sys
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Alignment
-from scripts.pipelines.stock_cap_report import get_all_index_caps
 import time
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from scripts.pipelines.stock_cap_report import get_all_index_caps
+from src.asset_mgnt_report.config.defaults import build_app_config
 from src.asset_mgnt_report.metrics.annualization import annualized_return_from_prices
 from src.asset_mgnt_report.metrics.returns import compute_daily_returns
 from src.asset_mgnt_report.metrics.sharpe import sharpe_ratio as shared_sharpe_ratio
 from src.asset_mgnt_report.metrics.volatility import annualized_volatility
 from src.asset_mgnt_report.services.progress import JobCancelledError, emit_progress, ensure_not_cancelled
+
+APP_CONFIG = build_app_config(project_root=PROJECT_ROOT)
         
 
 # 设置日志
@@ -472,7 +481,7 @@ class StockIndexAnalyzer:
             # 恢复原始日志级别
             logger.setLevel(original_level)
             
-    def export_weekly_report_table_to_csv(self, market_data: Dict[str, pd.DataFrame], filename: str = "output/stock_weekly_report.csv"):
+    def export_weekly_report_table_to_csv(self, market_data: Dict[str, pd.DataFrame], filename: str | Path | None = None):
         """ 导出周报表格 """
         from collections import defaultdict
         output = defaultdict(dict)
@@ -595,8 +604,8 @@ class StockIndexAnalyzer:
                 merge_start = row
                 current_val = cell_val
         
-        os.makedirs("output", exist_ok=True)
-        output_path = "output/stock_weekly_report.xlsx"
+        APP_CONFIG.output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = Path(filename) if filename else APP_CONFIG.output_dir / "stock_weekly_report.xlsx"
         wb.save(output_path)
         logger.info(f"Weekly report exported to {output_path}")
 
@@ -636,11 +645,11 @@ class StockIndexAnalyzer:
                     }
                     rows.append(row)
     
-        raw_path = 'output/raw_data'
-        os.makedirs(raw_path, exist_ok = True)
+        raw_path = APP_CONFIG.raw_output_dir
+        raw_path.mkdir(parents=True, exist_ok=True)
         
         stock_metrics = pd.DataFrame(rows)
-        stock_metrics.to_excel(f'{raw_path}/stock_metrics.xlsx', index=False)     
+        stock_metrics.to_excel(raw_path / "stock_metrics.xlsx", index=False)     
         
     
     def run_analysis(self, time_range: int = 2920):

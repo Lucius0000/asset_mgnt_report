@@ -1,5 +1,5 @@
 """
-"周报-资产大类表现-整体"表格计算。
+"周报-资产大类表现-整体" 表格计算。
 """
 
 from __future__ import annotations
@@ -13,12 +13,15 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from openpyxl import load_workbook
 
+from src.asset_mgnt_report.config.defaults import build_app_config
 from src.asset_mgnt_report.metrics.sharpe import adjusted_sharpe_ratio, sharpe_ratio
 
+APP_CONFIG = build_app_config(project_root=PROJECT_ROOT)
+
 CONFIG = {
-    "input_path": Path("data") / "seeds" / "整体.xlsx",
-    "output_path": Path("output") / "整体_processed.xlsx",
-    "log_path": Path("output") / "raw_data" / "整体_calculation_steps.txt",
+    "input_path": APP_CONFIG.seed_data_dir / "整体.xlsx",
+    "output_path": APP_CONFIG.output_dir / "整体_processed.xlsx",
+    "log_path": APP_CONFIG.raw_output_dir / "整体_calculation_steps.txt",
 }
 
 

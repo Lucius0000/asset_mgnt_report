@@ -1263,14 +1263,12 @@ def _render_main_page() -> None:
     st.multiselect(
         "主报表模块",
         options=[key for key, _ in MODULE_OPTIONS],
-        default=st.session_state["main_modules"],
         key="main_modules",
         format_func=lambda key: f"{MODULE_LABELS[key]} · {key}",
     )
     st.multiselect(
         "股票权益市场",
         options=[key for key, _ in STOCK_MARKET_OPTIONS],
-        default=st.session_state["main_stock_markets"],
         key="main_stock_markets",
         format_func=lambda key: f"{STOCK_MARKET_LABELS[key]} · {key}",
         help="仅对主报表中的“股票权益”模块生效。",
@@ -1288,14 +1286,12 @@ def _render_gainer_page() -> None:
     st.multiselect(
         "Gainer 子模块",
         options=[key for key, _ in GAINER_MODULE_OPTIONS],
-        default=st.session_state["gainer_modules"],
         key="gainer_modules",
         format_func=lambda key: f"{GAINER_MODULE_LABELS[key]} · {key}",
     )
     st.multiselect(
         "股票子模块市场",
         options=[key for key, _ in STOCK_MARKET_OPTIONS],
-        default=st.session_state["gainer_stock_markets"],
         key="gainer_stock_markets",
         format_func=lambda key: f"{STOCK_MARKET_LABELS[key]} · {key}",
         disabled="stocks" not in st.session_state.get("gainer_modules", []),

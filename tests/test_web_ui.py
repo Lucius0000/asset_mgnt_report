@@ -56,6 +56,21 @@ def test_home_button_navigates_to_secondary_market_workspace() -> None:
     assert at.selectbox[0].label == "市场模式"
 
 
+def test_secondary_market_workspace_exposes_split_market_modes() -> None:
+    assert streamlit_app.SECONDARY_MARKET_MODE_LABELS["china"] == "中国A股"
+    assert streamlit_app.SECONDARY_MARKET_MODE_LABELS["hk"] == "港股"
+
+
+def test_secondary_market_workspace_migrates_legacy_mode_state() -> None:
+    at = _run_page("secondary_market")
+    at.session_state["secondary_market_mode"] = "china_hk"
+
+    at.run()
+
+    assert not at.exception
+    assert at.session_state["secondary_market_mode"] == "china"
+
+
 def test_gainer_page_uses_calendar_inputs_and_shows_lbma_hint() -> None:
     at = _run_page("gainer")
 
@@ -85,6 +100,18 @@ def test_gainer_rejects_non_saturday_dates() -> None:
 
     assert not at.exception
     assert "必须选择周六" in at.session_state["result"]["output"]
+
+
+def test_gainer_workspace_migrates_legacy_string_dates() -> None:
+    at = _run_page("gainer")
+    at.session_state["gainer_current_date"] = "2026-04-11"
+    at.session_state["gainer_previous_date"] = "2026-03-28"
+
+    at.run()
+
+    assert not at.exception
+    assert str(at.session_state["gainer_current_date"]) == "2026-04-11"
+    assert str(at.session_state["gainer_previous_date"]) == "2026-03-28"
 
 
 def test_clear_result_keeps_home_visible() -> None:
@@ -252,12 +279,50 @@ def test_run_gainer_action_passes_selected_modules_and_markets(monkeypatch) -> N
         streamlit_app.st.session_state = original_state
 
 
+def test_run_gainer_action_coerces_legacy_string_dates(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    fake_state = {
+        "debug": False,
+        "use_proxy": True,
+        "gainer_modules": ["stocks", "btc"],
+        "gainer_stock_markets": ["US"],
+        "gainer_current_date": "2026-04-11",
+        "gainer_previous_date": "2026-03-28",
+        "gainer_current_gold_price": "",
+        "gainer_previous_gold_price": "",
+        "result": None,
+        "active_job_id": None,
+    }
+    original_state = streamlit_app.st.session_state
+    original_start = streamlit_app._start_background_job
+    original_gainer = streamlit_app.gainer_entry.main
+    streamlit_app.st.session_state = fake_state
+
+    def fake_start_background_job(label, callback):
+        callback(lambda _event: None, lambda: False)
+        fake_state["result"] = {"label": label, "status": "success"}
+
+    def fake_gainer_main(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(streamlit_app, "_start_background_job", fake_start_background_job)
+    monkeypatch.setattr(streamlit_app.gainer_entry, "main", fake_gainer_main)
+    try:
+        streamlit_app._run_gainer_action()
+        assert captured["modules"] == ["stocks", "btc"]
+        assert captured["stock_markets"] == ["US"]
+    finally:
+        streamlit_app._start_background_job = original_start
+        streamlit_app.gainer_entry.main = original_gainer
+        streamlit_app.st.session_state = original_state
+
+
 def test_run_secondary_market_action_passes_selected_options(monkeypatch) -> None:
     captured: dict[str, object] = {}
     fake_state = {
         "debug": False,
         "use_proxy": True,
-        "secondary_market_mode": "china_hk",
+        "secondary_market_mode": "china",
         "secondary_use_default_dates": False,
         "secondary_start_date": date(2026, 4, 3),
         "secondary_end_date": date(2026, 4, 18),
@@ -280,8 +345,45 @@ def test_run_secondary_market_action_passes_selected_options(monkeypatch) -> Non
     monkeypatch.setattr(streamlit_app.secondary_market_entry, "main", fake_secondary_main)
     try:
         streamlit_app._run_secondary_market_action()
-        assert captured["market_mode"] == "china_hk"
+        assert captured["market_mode"] == "china"
         assert captured["use_default_dates"] is False
+        assert captured["start_date"] == "2026-04-03"
+        assert captured["end_date"] == "2026-04-18"
+    finally:
+        streamlit_app._start_background_job = original_start
+        streamlit_app.secondary_market_entry.main = original_secondary
+        streamlit_app.st.session_state = original_state
+
+
+def test_run_secondary_market_action_migrates_legacy_mode(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    fake_state = {
+        "debug": False,
+        "use_proxy": True,
+        "secondary_market_mode": "china_hk",
+        "secondary_use_default_dates": False,
+        "secondary_start_date": "2026-04-03",
+        "secondary_end_date": "2026-04-18",
+        "result": None,
+        "active_job_id": None,
+    }
+    original_state = streamlit_app.st.session_state
+    original_start = streamlit_app._start_background_job
+    original_secondary = streamlit_app.secondary_market_entry.main
+    streamlit_app.st.session_state = fake_state
+
+    def fake_start_background_job(label, callback):
+        callback(lambda _event: None, lambda: False)
+        fake_state["result"] = {"label": label, "status": "success"}
+
+    def fake_secondary_main(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(streamlit_app, "_start_background_job", fake_start_background_job)
+    monkeypatch.setattr(streamlit_app.secondary_market_entry, "main", fake_secondary_main)
+    try:
+        streamlit_app._run_secondary_market_action()
+        assert captured["market_mode"] == "china"
         assert captured["start_date"] == "2026-04-03"
         assert captured["end_date"] == "2026-04-18"
     finally:

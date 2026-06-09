@@ -62,4 +62,9 @@ def build_app_config(project_root: str | Path | None = None, overrides: dict[str
     if config.use_proxy:
         os.environ["http_proxy"] = config.http_proxy
         os.environ["https_proxy"] = config.https_proxy
+        os.environ["HTTP_PROXY"] = config.http_proxy
+        os.environ["HTTPS_PROXY"] = config.https_proxy
+    else:
+        for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+            os.environ.pop(key, None)
     return config

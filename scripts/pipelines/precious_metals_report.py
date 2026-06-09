@@ -4,7 +4,10 @@
 
 import os
 from datetime import datetime, timedelta
+from pathlib import Path
+import sys
 import yfinance as yf
+import yfinance.cache as yf_cache
 import pandas as pd
 import numpy as np
 from openpyxl import Workbook
@@ -13,17 +16,46 @@ import math
 import logging
 import akshare as ak
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.asset_mgnt_report.config.defaults import build_app_config
+from src.asset_mgnt_report.config.inputs import parse_bool, resolve_config_value
+from src.asset_mgnt_report.io.overall_seed_snapshot import upsert_sheet1_asset_metrics
 from src.asset_mgnt_report.metrics.annualization import annualized_return_from_returns
 from src.asset_mgnt_report.metrics.sharpe import sharpe_ratio as shared_sharpe_ratio
 from src.asset_mgnt_report.metrics.volatility import annualized_volatility
 
 # ====== 调试打印与日志 ======
-DEBUG = False  # 控制是否在控制台打印；日志文件始终写入
-output_folder = "output"
-raw_data_folder = os.path.join(output_folder, "raw_data")
-os.makedirs(raw_data_folder, exist_ok=True)
+# 顶部配置区（适合 Spyder 直接运行）
+# - debug: 布尔值，True / False；True 时把调试信息输出到控制台
+CONFIG = {
+    "debug": False,
+}
+APP_CONFIG = build_app_config(project_root=PROJECT_ROOT)
+DEBUG = bool(resolve_config_value(
+    explicit=CONFIG["debug"],
+    env_key="AMR_PRECIOUS_METALS_DEBUG",
+    default=False,
+    caster=parse_bool,
+))
+output_folder = APP_CONFIG.output_dir
+raw_data_folder = APP_CONFIG.raw_output_dir
+output_folder.mkdir(parents=True, exist_ok=True)
+raw_data_folder.mkdir(parents=True, exist_ok=True)
 
-LOG_PATH = os.path.join(raw_data_folder, "precious_metals_calculation_steps.log")
+
+def _configure_yfinance_cache() -> None:
+    cache_dir = raw_data_folder / "yfinance_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    yf_cache.set_cache_location(str(cache_dir))
+    yf_cache.set_tz_cache_location(str(cache_dir))
+
+
+_configure_yfinance_cache()
+
+LOG_PATH = raw_data_folder / "precious_metals_calculation_steps.log"
 
 logger = logging.getLogger("pm_calc")
 logger.setLevel(logging.DEBUG)
@@ -48,6 +80,24 @@ def dprint(*args):
     logger.debug(msg)
     if DEBUG:
         print(msg)
+
+
+def _parse_percent_string(value):
+    if value in (None, "", "n/a"):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace("％", "%")
+    if text.endswith("%"):
+        text = text[:-1]
+    return float(text)
+
+
+def _percent_number_to_fraction(value):
+    parsed = _parse_percent_string(value)
+    if parsed is None:
+        return None
+    return round(parsed / 100.0, 6)
 
 # 你原有的代理设置（如不需要可移除）
 os.environ['http_proxy'] = 'http://127.0.0.1:7890'
@@ -74,7 +124,7 @@ for symbol in tickers:
     hist = ticker.history(period='6y')
     # 统一：确保索引为升序日期
     hist = hist.sort_index()
-    hist.to_csv(os.path.join(raw_data_folder, f"{symbol}.csv"), encoding='utf-8-sig')
+    hist.to_csv(raw_data_folder / f"{symbol}.csv", encoding='utf-8-sig')
     data_dict[symbol] = hist
 
 # ====== 新增：接入 “上海金基准价” ======
@@ -92,7 +142,7 @@ try:
         sge_df = sge_df.set_index('交易时间')
     sge_df = sge_df.sort_index()
     # 原样保存原始数据
-    sge_df.to_csv(os.path.join(raw_data_folder, "SGE_GOLD.csv"), encoding='utf-8-sig')
+    sge_df.to_csv(raw_data_folder / "SGE_GOLD.csv", encoding='utf-8-sig')
 except Exception as e:
     dprint(f"[SGE] 下载失败：{e}")
     sge_df = None
@@ -322,7 +372,6 @@ wb = Workbook()
 ws = wb.active
 ws.title = "Commodities"
 
-ws.append(["当前时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
 ws.append(header_top)
 ws.append(header_bottom)
 
@@ -342,19 +391,38 @@ merge_config = {
 }
 
 for (col_start, col_end), (col, row_span) in merge_config.items():
-    cell = ws.cell(row=2, column=col_start)
-    ws.merge_cells(start_row=2, start_column=col_start, end_row=2 + row_span - 1, end_column=col_end)
+    cell = ws.cell(row=1, column=col_start)
+    ws.merge_cells(start_row=1, start_column=col_start, end_row=1 + row_span - 1, end_column=col_end)
     cell.alignment = Alignment(horizontal='center', vertical='center')
 
 for row in data_rows:
     ws.append(row)
+    if len(row) >= 18 and row[1] == '上海金基准价（晚盘价）':
+        upsert_sheet1_asset_metrics(
+            region="商品与贵金属（黄金）",
+            asset_class=None,
+            fields={
+                "月收益率年化 (%)": _percent_number_to_fraction(row[15]),
+                "年收益率 (%)": _percent_number_to_fraction(row[16]),
+                "月波动率年化（%）": _percent_number_to_fraction(row[9]),
+            },
+            config=APP_CONFIG,
+        )
 
 for row in ws.iter_rows():
     for cell in row:
         cell.alignment = Alignment(horizontal='center', vertical='center')
 
-output_path = os.path.join(output_folder, "commodity_indicators_summary.xlsx")
-os.makedirs(output_folder, exist_ok=True)
+for row_idx in range(3, ws.max_row + 1):
+    for col_idx in (7, 8, 9, 10, 11, 12, 16, 17, 18):
+        cell = ws.cell(row=row_idx, column=col_idx)
+        parsed = _parse_percent_string(cell.value)
+        if parsed is None:
+            continue
+        cell.value = parsed / 100.0
+        cell.number_format = "0.00%"
+
+output_path = output_folder / "commodity_indicators_summary.xlsx"
 wb.save(output_path)
 
 # ====== 关闭日志 handler，确保写盘 ======

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -19,19 +20,23 @@ from src.asset_mgnt_report.config.inputs import resolve_config_value
 
 DATA_DIR = PROJECT_ROOT / "data" / "seeds"
 
+# 顶部配置区（适合 Spyder 直接运行）
+# - target_date: 字符串或 datetime，格式 YYYY-MM-DD，例如 2026-03-27；若不是周五会自动归一化
 CONFIG = {
     "target_date": None,
 }
 
 
-def _prompt_date(prompt: str) -> datetime:
+def _prompt_date(prompt: str, explicit: str | datetime | None = None) -> datetime:
     configured = resolve_config_value(
-        explicit=CONFIG["target_date"],
+        explicit=explicit if explicit is not None else CONFIG["target_date"],
         env_key="AMR_BOND_TARGET_DATE",
         caster=lambda raw: datetime.strptime(raw, "%Y-%m-%d"),
     )
-    if configured is not None:
+    if isinstance(configured, datetime):
         return configured
+    if configured is not None:
+        return datetime.strptime(str(configured), "%Y-%m-%d") if not isinstance(configured, datetime) else configured
     while True:
         raw = input(prompt).strip()
         if not raw:
@@ -126,20 +131,20 @@ def _load_us_treasury_values() -> UsbondsResult:
     )
 
 
-def main() -> None:
+def main(target_date: str | datetime | None = None) -> None:
     print("计算中美债券市场总市值差值\n")
-    target_date = _prompt_date("请输入收盘日期，需要最近的周五（YYYY-MM-DD）：")
-    prev_date = _previous_friday(target_date)
+    target_dt = _prompt_date("请输入收盘日期，需要最近的周五（YYYY-MM-DD）：", explicit=target_date)
+    prev_date = _previous_friday(target_dt)
 
     try:
-        cn_current = _extract_cn_treasury_value(target_date)
+        cn_current = _extract_cn_treasury_value(target_dt)
         cn_previous = _extract_cn_treasury_value(prev_date)
     except Exception as exc:
         print(f"中国数据获取失败：{exc}")
     else:
         diff_cn = cn_current - cn_previous
         print("中国国债托管市值：")
-        print(f"  {target_date:%Y-%m-%d}: {_format_billion(cn_current, 'CNY', 2)}")
+        print(f"  {target_dt:%Y-%m-%d}: {_format_billion(cn_current, 'CNY', 2)}")
         print(f"  {prev_date:%Y-%m-%d}: {_format_billion(cn_previous, 'CNY', 2)}")
         print(f"  差值（当前 - 前两周）：{_format_billion(diff_cn, 'CNY', 2)}\n")
 
@@ -155,5 +160,12 @@ def main() -> None:
         print(f"  差值（最新 - 次新）：{_format_billion(diff_us, 'USD', 0)}")
 
 
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="计算中美债券市值 Gainer。")
+    parser.add_argument("--target-date", help="目标日期，格式 YYYY-MM-DD。若非周五会自动归一化。")
+    return parser
+
+
 if __name__ == "__main__":
-    main()
+    args = _build_arg_parser().parse_args()
+    main(target_date=args.target_date)

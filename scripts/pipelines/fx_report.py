@@ -3,6 +3,7 @@
 输出汇率表：fx_metrics.xlsx
 '''
 
+import argparse
 import pandas as pd
 import numpy as np
 import os
@@ -10,12 +11,19 @@ import logging
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+import sys
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import akshare as ak
 import yfinance as yf
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from src.asset_mgnt_report.config.defaults import build_app_config
+from src.asset_mgnt_report.config.inputs import parse_bool, resolve_config_value
+from src.asset_mgnt_report.io.overall_seed_snapshot import upsert_sheet2_fx_rows
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -35,6 +43,11 @@ YAHOO_SYMBOLS = {
 APP_CONFIG = build_app_config()
 RAW_DATA_DIR = APP_CONFIG.raw_output_dir
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
+# 顶部配置区（适合 Spyder 直接运行）
+# - debug: 布尔值，True / False；True 时额外打印调试提示
+CONFIG = {
+    "debug": False,
+}
 
 
 @contextmanager
@@ -445,7 +458,13 @@ def plot_trend(data_dict, years=2):
     plt.savefig(APP_CONFIG.output_dir / "fx_trend_2y.png", dpi=300)
     plt.close()
 
-def main(debug = False):
+def main(debug = None):
+    resolved_debug = resolve_config_value(
+        explicit=debug,
+        env_key="AMR_FX_DEBUG",
+        default=CONFIG["debug"],
+        caster=parse_bool,
+    )
     print("=" * 40)
     print("货币汇率分析 USD/CNH、USD/HKD、CNH/HKD")
     print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -473,12 +492,23 @@ def main(debug = False):
             metrics_df = metrics_df.drop(columns=drop_cols, errors='ignore')
     except Exception:
         pass
+    snapshot_columns = ["货币汇率", "汇率值", "日期", "MoM(%)", "YoY(%)", "5年均值", "5年均值周期"]
+    upsert_sheet2_fx_rows(metrics_df[snapshot_columns].to_dict(orient="records"), config=APP_CONFIG)
     metrics_df.to_excel(APP_CONFIG.output_dir / "fx_metrics.xlsx", index=False)
     print(metrics_df)
+    if resolved_debug:
+        print("\n调试模式：已输出指标表。")
 
     # 可视化
     # plot_trend(fx_data)
 
 
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="运行汇率分析报告。")
+    parser.add_argument("--debug", action="store_true", default=None, help="启用调试输出。")
+    return parser
+
+
 if __name__ == "__main__":
-    main()
+    args = _build_arg_parser().parse_args()
+    main(debug=args.debug)

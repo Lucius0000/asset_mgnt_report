@@ -12,6 +12,8 @@
 
 import argparse
 import os
+from pathlib import Path
+import sys
 from typing import List
 
 import matplotlib.pyplot as plt
@@ -23,7 +25,13 @@ import yfinance as yf
 from matplotlib.colors import TwoSlopeNorm
 from datetime import datetime
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from src.asset_mgnt_report.config.defaults import build_app_config
+from src.asset_mgnt_report.config.inputs import parse_bool, resolve_config_value
+from src.asset_mgnt_report.io.overall_seed_snapshot import upsert_sheet1_asset_metrics
 from src.asset_mgnt_report.metrics.annualization import annualized_return_from_returns
 from src.asset_mgnt_report.metrics.returns import relative_change, trailing_percentile
 from src.asset_mgnt_report.metrics.sharpe import sharpe_ratio as shared_sharpe_ratio
@@ -32,6 +40,13 @@ from src.asset_mgnt_report.metrics.volatility import annualized_volatility
 # ========= 全局配置 =========
 # 在这里指定结束日期（如 "2025-08-11"），None 表示用今天
 END_DATE_STR = None
+# 顶部配置区（适合 Spyder 直接运行）
+# - debug: 布尔值，True / False
+# - end_date: 字符串或 None，格式 YYYY-MM-DD，例如 2026-04-14；None 表示当天
+CONFIG = {
+    "debug": False,
+    "end_date": END_DATE_STR,
+}
 
 APP_CONFIG = build_app_config()
 OUTPUT_DIR = str(APP_CONFIG.output_dir)
@@ -312,27 +327,27 @@ def export_to_excel_template(df: pd.DataFrame, filename: str = "crypto_metrics_t
         syms = [str(s).strip() for s in df["Symbol"].tolist()]
 
         price_map = df.set_index("Symbol")["Current_Price"].reindex(syms)
-        mom_map   = (df.set_index("Symbol")["MoM"] * 100).reindex(syms)
-        yoy_map   = (df.set_index("Symbol")["YoY"] * 100).reindex(syms)
-        chg2w_map = (df.set_index("Symbol")["Change_2W"] * 100).reindex(syms)
-        pct1y_map = (df.set_index("Symbol")["Pctile_1Y"] * 100).reindex(syms)
+        mom_map   = df.set_index("Symbol")["MoM"].reindex(syms)
+        yoy_map   = df.set_index("Symbol")["YoY"].reindex(syms)
+        chg2w_map = df.set_index("Symbol")["Change_2W"].reindex(syms)
+        pct1y_map = df.set_index("Symbol")["Pctile_1Y"].reindex(syms)
         mcap_map  = df.set_index("Symbol")["Market_Cap"].reindex(syms) / 1e9  # 十亿美元
         wv_map    = (df.set_index("Symbol")["Weekly_Volume"].reindex(syms) / 1e9)
 
-        # 波动率(%)
-        mvol = (df.set_index("Symbol")["Month_Volatility"] * 100).reindex(syms)
-        qvol = (df.set_index("Symbol")["Quarter_Volatility"] * 100).reindex(syms)
-        yvol = (df.set_index("Symbol")["Year_Volatility"] * 100).reindex(syms)
+        # 波动率（内部统一为 fraction，Excel 用百分比格式显示）
+        mvol = df.set_index("Symbol")["Month_Volatility"].reindex(syms)
+        qvol = df.set_index("Symbol")["Quarter_Volatility"].reindex(syms)
+        yvol = df.set_index("Symbol")["Year_Volatility"].reindex(syms)
 
         # Sharpe
         msp = df.set_index("Symbol")["Month_Sharpe"].reindex(syms)
         qsp = df.set_index("Symbol")["Quarter_Sharpe"].reindex(syms)
         ysp = df.set_index("Symbol")["Year_Sharpe"].reindex(syms)
 
-        # 收益率年化(%)
-        mret = (df.set_index("Symbol")["Month_Return"] * 100).reindex(syms)
-        qret = (df.set_index("Symbol")["Quarter_Return"] * 100).reindex(syms)
-        yret = (df.set_index("Symbol")["Year_Return"] * 100).reindex(syms)
+        # 收益率年化（内部统一为 fraction，Excel 用百分比格式显示）
+        mret = df.set_index("Symbol")["Month_Return"].reindex(syms)
+        qret = df.set_index("Symbol")["Quarter_Return"].reindex(syms)
+        yret = df.set_index("Symbol")["Year_Return"].reindex(syms)
 
         from openpyxl import Workbook
         from openpyxl.styles import Alignment
@@ -340,73 +355,86 @@ def export_to_excel_template(df: pd.DataFrame, filename: str = "crypto_metrics_t
         ws = wb.active
         ws.title = "Sheet1"
 
-        ws["A1"] = "当前时间"
-        ws["B1"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
         # 列标题: C.. = 币种
-        ws["A2"] = "指标"; ws.merge_cells("A2:B2")
-        ws["A3"] = "总市值 (B $)"; ws.merge_cells("A3:B3")
-        ws["A4"] = "收盘价"; ws.merge_cells("A4:B4")
-        ws["A5"] = "交易量（B $)"; ws.merge_cells("A5:B5")
-        ws["A6"] = "环比 MoM(%)"; ws.merge_cells("A6:B6")
-        ws["A7"] = "同比 YoY(%)"; ws.merge_cells("A7:B7")
-        ws["A8"] = "百分位(1Y, %)"; ws.merge_cells("A8:B8")
-        ws["A9"] = "两周变动(%)"; ws.merge_cells("A9:B9")
+        ws["A1"] = "指标"; ws.merge_cells("A1:B1")
+        ws["A2"] = "总市值 (B $)"; ws.merge_cells("A2:B2")
+        ws["A3"] = "收盘价"; ws.merge_cells("A3:B3")
+        ws["A4"] = "交易量（B $)"; ws.merge_cells("A4:B4")
+        ws["A5"] = "环比 MoM(%)"; ws.merge_cells("A5:B5")
+        ws["A6"] = "同比 YoY(%)"; ws.merge_cells("A6:B6")
+        ws["A7"] = "百分位(1Y, %)"; ws.merge_cells("A7:B7")
+        ws["A8"] = "两周变动(%)"; ws.merge_cells("A8:B8")
 
-        ws["A10"] = "波动率(%)"; ws.merge_cells("A10:A12")
-        ws["B10"] = "短期（月）"
-        ws["B11"] = "中期（季度）"
-        ws["B12"] = "长期（年）"
+        ws["A9"] = "波动率(%)"; ws.merge_cells("A9:A11")
+        ws["B9"] = "短期（月）"
+        ws["B10"] = "中期（季度）"
+        ws["B11"] = "长期（年）"
 
-        ws["A13"] = "Sharp Ratio"; ws.merge_cells("A13:A15")
-        ws["B13"] = "短期（月）"
-        ws["B14"] = "中期（季度）"
-        ws["B15"] = "长期（年）"
+        ws["A12"] = "Sharp Ratio"; ws.merge_cells("A12:A14")
+        ws["B12"] = "短期（月）"
+        ws["B13"] = "中期（季度）"
+        ws["B14"] = "长期（年）"
 
-        ws["A16"] = "收益率年化(%)"; ws.merge_cells("A16:A18")
-        ws["B16"] = "短期（月）"
-        ws["B17"] = "中期（季度）"
-        ws["B18"] = "长期（年）"
+        ws["A15"] = "收益率年化(%)"; ws.merge_cells("A15:A17")
+        ws["B15"] = "短期（月）"
+        ws["B16"] = "中期（季度）"
+        ws["B17"] = "长期（年）"
 
         # 币种列头
         start_col = 3  # C列
         for i, s in enumerate(syms):
-            ws.cell(row=2, column=start_col + i, value=s)
+            ws.cell(row=1, column=start_col + i, value=s)
 
         # 写入工具
-        def write_row_values(row_idx, series, integer_thousands=False):
+        def write_row_values(row_idx, series, integer_thousands=False, as_percent=False):
             for i, s in enumerate(syms):
                 val = None if pd.isna(series.get(s)) else float(series.get(s))
                 cell = ws.cell(row=row_idx, column=start_col + i, value=val)
-                cell.number_format = '#,##0' if integer_thousands else '#,##0.00'
+                if as_percent:
+                    cell.number_format = '0.00%'
+                else:
+                    cell.number_format = '#,##0' if integer_thousands else '#,##0.00'
 
         # A2~A8
-        write_row_values(3,  mcap_map, integer_thousands=True)   # 总市值(B$)
-        write_row_values(4,  price_map)                          # 收盘价
-        write_row_values(5,  wv_map, integer_thousands=True)     # 交易量(B$)
-        write_row_values(6,  mom_map)                            # MoM %
-        write_row_values(7,  yoy_map)                            # YoY %
-        write_row_values(8,  pct1y_map)                          # 百分位(1Y)
-        write_row_values(9,  chg2w_map)                          # 两周变动 %
+        write_row_values(2,  mcap_map, integer_thousands=True)   # 总市值(B$)
+        write_row_values(3,  price_map)                          # 收盘价
+        write_row_values(4,  wv_map, integer_thousands=True)     # 交易量(B$)
+        write_row_values(5,  mom_map, as_percent=True)           # MoM %
+        write_row_values(6,  yoy_map, as_percent=True)           # YoY %
+        write_row_values(7,  pct1y_map, as_percent=True)         # 百分位(1Y)
+        write_row_values(8,  chg2w_map, as_percent=True)         # 两周变动 %
 
         # 波动率
-        write_row_values(10, mvol)
-        write_row_values(11, qvol)
-        write_row_values(12, yvol)
+        write_row_values(9, mvol, as_percent=True)
+        write_row_values(10, qvol, as_percent=True)
+        write_row_values(11, yvol, as_percent=True)
 
         # Sharpe
-        write_row_values(13, msp)
-        write_row_values(14, qsp)
-        write_row_values(15, ysp)
+        write_row_values(12, msp)
+        write_row_values(13, qsp)
+        write_row_values(14, ysp)
 
         # 收益率年化
-        write_row_values(16, mret)
-        write_row_values(17, qret)
-        write_row_values(18, yret)
+        write_row_values(15, mret, as_percent=True)
+        write_row_values(16, qret, as_percent=True)
+        write_row_values(17, yret, as_percent=True)
+
+        btc_symbol = "BTC"
+        upsert_sheet1_asset_metrics(
+            region="数字货币（BTC）",
+            asset_class=None,
+            fields={
+                "月收益率年化 (%)": round(float(mret.get(btc_symbol)), 6),
+                "年收益率 (%)": round(float(yret.get(btc_symbol)), 6),
+                "月波动率年化（%）": round(float(mvol.get(btc_symbol)), 6),
+                "总市值 ($)": f"{float(mcap_map.get(btc_symbol)):,.0f} B USD",
+            },
+            config=APP_CONFIG,
+        )
 
         # 对齐与列宽
         for col in range(1, start_col + len(syms)):
-            for row in range(1, 19):
+            for row in range(1, 18):
                 ws.cell(row=row, column=col).alignment = Alignment(horizontal="center", vertical="center")
         ws.column_dimensions["A"].width = 14
         ws.column_dimensions["B"].width = 14
@@ -557,21 +585,33 @@ def plot_crypto_treemap(
     return output_path
 
 # ================= 主流程 =================
-def main(debug: bool = False) -> None:
+def main(debug: bool | None = None, end_date: str | None = None) -> None:
+    resolved_debug = resolve_config_value(
+        explicit=debug,
+        env_key="AMR_CRYPTO_DEBUG",
+        default=CONFIG["debug"],
+        caster=parse_bool,
+    )
+    resolved_end_date = resolve_config_value(
+        explicit=end_date,
+        env_key="AMR_CRYPTO_END_DATE",
+        default=CONFIG["end_date"],
+        caster=lambda raw: raw,
+    )
     print("正在计算加密货币指标...")
 
     # 指标表：只统计四个
-    df_metrics = calculate_metrics(METRICS_TICKERS, end_date=END_DATE_STR)
+    df_metrics = calculate_metrics(METRICS_TICKERS, end_date=resolved_end_date)
 
     # 仅在 debug=True 时打印到控制台
-    if debug:
+    if resolved_debug:
         print_metrics_report(df_metrics)
 
     excel_path = os.path.join(OUTPUT_DIR, "crypto_metrics.xlsx")
     export_to_excel_template(df_metrics, filename=excel_path)
 
     # 可视化：统计至少15个主流加密货币
-    df_viz = calculate_metrics(VIZ_TICKERS, end_date=END_DATE_STR)
+    df_viz = calculate_metrics(VIZ_TICKERS, end_date=resolved_end_date)
     png_path = plot_crypto_treemap(
         df_viz,
         top_n=15,
@@ -585,7 +625,8 @@ def main(debug: bool = False) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Crypto metrics and treemap generator")
-    parser.add_argument("--debug", action="store_true",
+    parser.add_argument("--debug", action="store_true", default=None,
                         help="若指定则打印四个币种的控制台报告")
+    parser.add_argument("--end-date", help="结束日期，格式 YYYY-MM-DD。")
     args = parser.parse_args()
-    main(debug=args.debug)
+    main(debug=args.debug, end_date=args.end_date)

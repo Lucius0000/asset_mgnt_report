@@ -51,9 +51,11 @@ $env:FRED_API_KEY="your_fred_api_key"
 
 #### 4. “整体”表格准备
 
-- 需要先把各资产大类的 `月收益率年化 (%)`、`年收益率 (%)`、`月波动率年化（%）`、`总市值 ($)` 按 `整体.xlsx` 模板整理到 `data/seeds/整体.xlsx`
-- 还需要把 `output/fx_metrics.xlsx` 中的汇率表复制到 `整体.xlsx` 的 `Sheet2`
-- 然后再执行 `scripts/overall.py`
+- 先运行 `scripts/main.py`
+- 再运行 `scripts/gainer.py`
+- 最后运行 `scripts/overall.py`
+- `scripts/overall.py` 会自动把主报表与 Gainer 的标准化快照回填到 `data/seeds/整体.xlsx`，再输出 `output/整体_processed.xlsx`
+- `data/seeds/整体.xlsx` 中房地产等非自动托管行仍保留人工维护；自动流程只覆盖股票权益、债券固收、商品与贵金属（黄金）、数字货币（BTC）、汇率表和 `Gainer` 列
 - `scripts/房地产-半自动化表格.xlsx` 是房地产板块的人工整理辅助表，不参与自动脚本直接读取，但属于当前周报工作流的配套输入模板，使用时不要删除或归档到不可见位置
 
 整体表格整理示例：
@@ -63,13 +65,13 @@ $env:FRED_API_KEY="your_fred_api_key"
 
 #### 1. 本地 Python 运行
 
-- 一键运行主报表：
+- 统一入口脚本：
 
 ```powershell
 python scripts/main.py
 ```
 
-- 运行 Gainer 汇总：
+- 统一 Gainer 入口：
 
 ```powershell
 python scripts/gainer.py
@@ -87,30 +89,205 @@ python scripts/overall.py
 python -m scripts.pipelines.secondary_market_report
 ```
 
-#### 2. 参数配置
+#### 2. 四种运行方式
+
+当前 `scripts/pipelines/` 下的 `*_report.py` 与 `gainer_*.py` 已统一支持以下四种运行方式：
+
+1. CLI 单独运行
+2. Web UI 触发
+3. `main.py` / `gainer.py` 统一调度
+4. Spyder 控制台运行（通过脚本顶部 `CONFIG` 先设参数，再直接运行）
+
+说明：
+
+- 对大多数脚本，CLI 单独运行既支持 `python scripts/pipelines/xxx.py`，也支持通过命令行参数覆盖关键输入。
+- `precious_metals_report.py` 当前也支持单独 CLI 运行、Web UI、统一调度和 Spyder，但它的 CLI 入口仍是“直接执行脚本”风格，暂未单独暴露 argparse 参数。
+- `main.py` 与 `gainer.py` 本身也已统一为：顶部 `CONFIG` + 环境变量 + CLI 参数 三层配置入口。
+
+示例：
+
+- 主报表统一入口：
+
+```powershell
+python scripts/main.py --modules gdp bonds --bond-date 2026-03-27
+```
+
+- Gainer 统一入口：
+
+```powershell
+python scripts/gainer.py --modules gold btc --current-date 2026-04-11 --previous-date 2026-03-28
+```
+
+- 单独运行债券周报：
+
+```powershell
+python scripts/pipelines/bond_report.py --start-date 2026-03-15 --end-date 2026-03-28
+```
+
+- 单独运行股票 Gainer：
+
+```powershell
+python scripts/pipelines/gainer_stock.py --old-date 2026-03-28 --new-date 2026-04-11 --markets CN US
+```
+
+#### 3. 参数配置
 
 参数配置有三层优先级，从高到低依次为：
 
-1. 环境变量
-2. 入口脚本顶部的 `CONFIG`
-3. `src/asset_mgnt_report/config/defaults.py` 中的默认配置
+1. 函数显式参数 / CLI 参数
+2. 环境变量
+3. 入口脚本顶部的 `CONFIG`
+4. `src/asset_mgnt_report/config/defaults.py` 中的默认配置
 
-最常改的是 `scripts/` 下四个入口脚本顶部的 `CONFIG`：
+##### 3.1 代码顶部 `CONFIG` 的填写格式
 
-- `scripts/main.py`
-  - `debug`
-  - `modules`
-- `scripts/gainer.py`
-  - `current_date`
-  - `previous_date`
-  - `current_gold_price`
-  - `previous_gold_price`
-- `scripts/overall.py`
-  - `input_path`
-  - `output_path`
-  - `log_path`
-- `scripts/web_ui.py`
-  - Web UI 本身不单独维护参数，直接复用统一配置
+适用于 Spyder 直接运行：先改脚本顶部 `CONFIG`，再运行脚本。
+
+通用格式约定：
+
+- 日期：
+  - 统一优先使用 `YYYY-MM-DD`
+  - 例如：`2026-03-27`
+  - 不要写成 `2026.03.27`
+- 日期区间：
+  - 分别填 `start_date` 和 `end_date`
+  - 例如：`2026-03-15` 到 `2026-03-28`
+- 布尔值：
+  - 使用 `True` / `False`
+- 列表：
+  - Python 列表字面量
+  - 例如：`["CN", "US"]`
+- 数值：
+  - 直接写数字
+  - 例如黄金价格：`3240.5`
+- 路径：
+  - 可以写 `Path(...)`，也可以写字符串
+  - 相对路径默认相对项目根目录
+
+常用入口脚本的 `CONFIG` 含义：
+
+| 脚本 | `CONFIG` 字段 | 填写格式 |
+| --- | --- | --- |
+| `scripts/main.py` | `debug` | `True` / `False` |
+| `scripts/main.py` | `modules` | 列表；候选值：`cpi`、`gdp`、`interest_rate`、`carry_trade`、`stock_index`、`currency`、`precious_metals`、`bonds`、`crypto` |
+| `scripts/main.py` | `stock_markets` | 列表；候选值：`"CN"`、`"US"`、`"HK"` |
+| `scripts/main.py` | `bond_date` / `bond_start_date` / `bond_end_date` | 日期字符串：`YYYY-MM-DD` 或 `YYYYMMDD` |
+| `scripts/main.py` | `bond_write_history` / `bond_update_snapshot` | `True` / `False`；`bond_write_history=True` 时额外生成 `output/bonds_YYYYMMDD.xlsx` |
+| `scripts/gainer.py` | `current_date` / `previous_date` | 日期字符串：`YYYY-MM-DD`；两者都应为周六 |
+| `scripts/gainer.py` | `current_gold_price` / `previous_gold_price` | 浮点数，单位 `USD/oz` |
+| `scripts/gainer.py` | `modules` | 列表；候选值：`stocks`、`bonds`、`gold`、`btc` |
+| `scripts/gainer.py` | `stock_markets` | 列表；候选值：`"CN"`、`"US"`、`"HK"` |
+| `scripts/gainer.py` | `output_path` | 路径字符串或 `Path(...)` |
+| `scripts/overall.py` | `input_path` / `output_path` / `log_path` | 路径字符串或 `Path(...)` |
+
+单脚本 `CONFIG` 也已补注释，直接看脚本顶部即可。常见示例：
+
+| 脚本 | 常用字段 | 填写格式 |
+| --- | --- | --- |
+| `bond_report.py` | `bond_date` / `start_date` / `end_date` | `YYYY-MM-DD` 或 `YYYYMMDD` |
+| `secondary_market_report.py` | `market_mode` | `us` / `china` / `hk` / `mixed` |
+| `secondary_market_report.py` | `start_date` / `end_date` | `YYYY-MM-DD` |
+| `stock_index_report.py` | `time_range` | 整数天数，如 `30`、`365`、`2920` |
+| `gainer_stock.py` | `old_date` / `new_date` | `YYYY-MM-DD` |
+| `gainer_stock.py` | `markets` | 列表；候选值：`"CN"`、`"US"`、`"HK"` |
+| `gainer_bond.py` | `target_date` | `YYYY-MM-DD` |
+| `gainer_btc.py` | `old_date` / `new_date` | `YYYY-MM-DD` |
+| `gainer_gold.py` | `current_price` / `previous_price` | 浮点数，单位 `USD/oz` |
+| 其余报表脚本 | `debug` | `True` / `False` |
+
+##### 3.2 CLI 参数说明
+
+下表只列“显式支持的 CLI 参数”。
+其中 `precious_metals_report.py` 目前支持直接 CLI 运行，但没有单独暴露 argparse 参数。
+
+| 脚本 | 支持参数 | 参数格式 |
+| --- | --- | --- |
+| `scripts/main.py` | `--debug` | 开关参数 |
+| `scripts/main.py` | `--modules` | 空格分隔列表；候选值同上，如 `--modules gdp bonds` |
+| `scripts/main.py` | `--stock-markets` | 空格分隔列表；如 `--stock-markets CN US` |
+| `scripts/main.py` | `--bond-date` | `YYYY-MM-DD` 或 `YYYYMMDD` |
+| `scripts/main.py` | `--bond-start-date` / `--bond-end-date` | `YYYY-MM-DD` 或 `YYYYMMDD` |
+| `scripts/main.py` | `--bond-write-history` | 开关参数；额外生成 `output/bonds_YYYYMMDD.xlsx` |
+| `scripts/main.py` | `--bond-skip-snapshot-update` | 开关参数 |
+| `scripts/gainer.py` | `--current-date` / `--previous-date` | `YYYY-MM-DD`；两者都应为周六 |
+| `scripts/gainer.py` | `--current-gold-price` / `--previous-gold-price` | 浮点数 |
+| `scripts/gainer.py` | `--modules` | 空格分隔列表；候选值：`stocks bonds gold btc` |
+| `scripts/gainer.py` | `--stock-markets` | 空格分隔列表；如 `--stock-markets CN HK` |
+| `scripts/gainer.py` | `--output-path` | 路径字符串 |
+| `bond_report.py` | `--debug` | 开关参数 |
+| `bond_report.py` | `--bond-date` | `YYYY-MM-DD` 或 `YYYYMMDD` |
+| `bond_report.py` | `--start-date` / `--end-date` | `YYYY-MM-DD` 或 `YYYYMMDD` |
+| `bond_report.py` | `--write-history` | 开关参数；额外生成 `output/bonds_YYYYMMDD.xlsx` |
+| `bond_report.py` | `--skip-snapshot-update` | 开关参数 |
+| `carry_trade_report.py` | `--debug` | 开关参数 |
+| `cpi_report.py` | `--debug` | 开关参数 |
+| `crypto_report.py` | `--debug` | 开关参数 |
+| `crypto_report.py` | `--end-date` | `YYYY-MM-DD` |
+| `fx_report.py` | `--debug` | 开关参数 |
+| `gainer_bond.py` | `--target-date` | `YYYY-MM-DD` |
+| `gainer_btc.py` | `--old-date` / `--new-date` | `YYYY-MM-DD` |
+| `gainer_gold.py` | `--current-price` / `--previous-price` | 浮点数 |
+| `gainer_stock.py` | `--old-date` / `--new-date` | `YYYY-MM-DD` |
+| `gainer_stock.py` | `--markets` | 空格分隔列表；候选值：`CN US HK` |
+| `gdp_report.py` | `--debug` | 开关参数 |
+| `interest_rate_report.py` | `--debug` | 开关参数 |
+| `secondary_market_report.py` | `--market-mode` | `us` / `china` / `hk` / `mixed` |
+| `secondary_market_report.py` | `--use-default-dates` | 开关参数 |
+| `secondary_market_report.py` | `--start-date` / `--end-date` | `YYYY-MM-DD` |
+| `stock_cap_report.py` | `--markets` | 空格分隔列表；候选值：`CN US HK` |
+| `stock_index_report.py` | `--time-range` | 整数天数 |
+| `stock_index_report.py` | `--debug` | 开关参数 |
+| `stock_index_report.py` | `--stock-markets` | 空格分隔列表；候选值：`CN US HK` |
+
+CLI 示例：
+
+```powershell
+python scripts/main.py --modules gdp bonds --bond-date 2026-03-27
+python scripts/gainer.py --modules gold btc --current-date 2026-04-11 --previous-date 2026-03-28
+python scripts/pipelines/bond_report.py --start-date 2026-03-15 --end-date 2026-03-28
+python scripts/pipelines/gainer_stock.py --old-date 2026-03-28 --new-date 2026-04-11 --markets CN US
+```
+
+##### 3.3 统一调度入口支持范围
+
+统一调度入口分两类：
+
+`scripts/main.py` 的模块映射：
+
+| 模块名 | 对应脚本 |
+| --- | --- |
+| `cpi` | `scripts/pipelines/cpi_report.py` |
+| `gdp` | `scripts/pipelines/gdp_report.py` |
+| `interest_rate` | `scripts/pipelines/interest_rate_report.py` |
+| `carry_trade` | `scripts/pipelines/carry_trade_report.py` |
+| `stock_index` | `scripts/pipelines/stock_index_report.py` |
+| `currency` | `scripts/pipelines/fx_report.py` |
+| `precious_metals` | `scripts/pipelines/precious_metals_report.py` |
+| `bonds` | `scripts/pipelines/bond_report.py` |
+| `crypto` | `scripts/pipelines/crypto_report.py` |
+
+`scripts/gainer.py` 的模块映射：
+
+| 模块名 | 对应脚本 |
+| --- | --- |
+| `stocks` | `scripts/pipelines/gainer_stock.py` |
+| `bonds` | `scripts/pipelines/gainer_bond.py` |
+| `gold` | `scripts/pipelines/gainer_gold.py` |
+| `btc` | `scripts/pipelines/gainer_btc.py` |
+
+ | 入口脚本 | 调度范围 | 支持参数 | 参数格式 |
+ | --- | --- | --- | --- |
+| `scripts/main.py` | 主报表模块：`cpi`、`gdp`、`interest_rate`、`carry_trade`、`stock_index`、`currency`、`precious_metals`、`bonds`、`crypto` | `debug` | `True` / `False` 或 `--debug` |
+| `scripts/main.py` | 同上 | `modules` | 列表或 CLI 空格分隔列表 |
+| `scripts/main.py` | 仅 `stock_index` 子链路 | `stock_markets` | `["CN", "US"]` 或 `--stock-markets CN US` |
+| `scripts/main.py` | 仅 `bonds` 子链路 | `bond_date` | `YYYY-MM-DD` / `YYYYMMDD` |
+| `scripts/main.py` | 仅 `bonds` 子链路 | `bond_start_date` / `bond_end_date` | `YYYY-MM-DD` / `YYYYMMDD` |
+| `scripts/main.py` | 仅 `bonds` 子链路 | `bond_write_history` / `bond_update_snapshot` | `True` / `False` 或开关参数；历史补录文件直接写入 `output/` |
+| `scripts/gainer.py` | Gainer 子链路：`stocks`、`bonds`、`gold`、`btc` | `modules` | 列表或 CLI 空格分隔列表 |
+| `scripts/gainer.py` | 仅 `stocks` 子链路 | `stock_markets` | `["CN", "HK"]` 或 `--stock-markets CN HK` |
+| `scripts/gainer.py` | 统一日期输入 | `current_date` / `previous_date` | `YYYY-MM-DD`；两者都应为周六 |
+| `scripts/gainer.py` | 仅 `gold` 子链路 | `current_gold_price` / `previous_gold_price` | 浮点数，单位 `USD/oz` |
+| `scripts/gainer.py` | 输出路径 | `output_path` | 路径字符串或 `Path(...)` |
 
 环境变量适合 Docker 和自动化场景，常用项包括：
 
@@ -120,12 +297,22 @@ python -m scripts.pipelines.secondary_market_report
 - `AMR_HTTPS_PROXY`
 - `FRED_API_KEY`
   - 用于美国 GDP、利率、CPI、核心 PCE 等官方 FRED 序列
+- `AMR_MAIN_MODULES`
+- `AMR_MAIN_STOCK_MARKETS`
+- `AMR_MAIN_BOND_DATE`
+- `AMR_MAIN_BOND_START_DATE`
+- `AMR_MAIN_BOND_END_DATE`
+- `AMR_MAIN_BOND_WRITE_HISTORY`
+- `AMR_MAIN_BOND_UPDATE_SNAPSHOT`
 - `AMR_GAINER_CURRENT_DATE`
 - `AMR_GAINER_PREVIOUS_DATE`
+- `AMR_GAINER_MODULES`
+- `AMR_GAINER_STOCK_MARKETS`
+- `AMR_GAINER_OUTPUT_PATH`
 - `AMR_GOLD_CURRENT_PRICE`
 - `AMR_GOLD_PREVIOUS_PRICE`
 
-#### 3. Web UI 运行
+#### 4. Web UI 运行
 
 - 启动方式：
 
@@ -147,7 +334,7 @@ streamlit run scripts/web_ui.py
   - 在当前标签页内保留运行结果，不再因工作区切换出现空白页
   - 触发 main / codex 输出校验
 
-#### 4. Docker 运行
+#### 5. Docker 运行
 
 - 构建镜像：
 
@@ -177,7 +364,7 @@ docker compose run --rm amr-cli python -m scripts.validation.validate_outputs
 - `docs/docker部署与使用指南.md`
 - `docs/版本迭代日志.md`
 
-#### 5. 输出位置
+#### 6. 输出位置
 
 - 主输出目录：`output/`
 - 原始调试数据：`output/raw_data/`
@@ -215,12 +402,12 @@ docker compose run --rm amr-cli python -m scripts.validation.validate_outputs
 | 利差 | `scripts/pipelines/carry_trade_report.py` | `currency_spreads.png` |
 | 汇率 | `scripts/pipelines/fx_report.py` | `fx_metrics.xlsx` |
 | 股票权益 | `scripts/pipelines/stock_index_report.py`、`scripts/pipelines/stock_cap_report.py` | `stock_weekly_report.xlsx` |
-| 债券 | `scripts/pipelines/bond_report.py` | `bonds.xlsx`（顶部新增“当前时间”元数据行） |
-| 商品与贵金属 | `scripts/pipelines/precious_metals_report.py` | `commodity_indicators_summary.xlsx`（顶部新增“当前时间”元数据行） |
-| 数字货币 | `scripts/pipelines/crypto_report.py` | `crypto_metrics.xlsx`（顶部新增“当前时间”元数据行） |
+| 债券 | `scripts/pipelines/bond_report.py` | `bonds.xlsx` |
+| 商品与贵金属 | `scripts/pipelines/precious_metals_report.py` | `commodity_indicators_summary.xlsx` |
+| 数字货币 | `scripts/pipelines/crypto_report.py` | `crypto_metrics.xlsx` |
 | Gainer | `scripts/gainer.py` | `Gainer.xlsx` |
-| 整体 | `scripts/overall.py` | `整体_processed.xlsx` |
-| 二级市场 | `scripts/pipelines/secondary_market_report.py` | `mixed_market_report_*.xlsx` |
+| 整体 | `scripts/overall.py` | `整体_processed.xlsx`（运行时会同步维护 `data/seeds/整体.xlsx` 与 `output/raw_data/overall_seed_snapshot.json`） |
+| 二级市场 | `scripts/pipelines/secondary_market_report.py` | `us_market_report_*.xlsx`、`china_market_report_*.xlsx`、`hk_market_report_*.xlsx`、`mixed_market_report_*.xlsx` |
 
 ### 六、数据获取及计算方法
 

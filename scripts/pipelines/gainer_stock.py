@@ -15,6 +15,7 @@ Index free-float market cap (approx) at two dates with Gainer.
 import os
 os.environ.setdefault("PYTHONWARNINGS", "ignore")
 
+import argparse
 import re
 import sys
 import time
@@ -33,6 +34,10 @@ import io
 import pandas as pd
 import requests
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 try:
     from tqdm import tqdm
 except Exception:
@@ -41,9 +46,8 @@ except Exception:
 
 import yfinance as yf
 import akshare as ak
+from src.asset_mgnt_report.config.inputs import parse_csv_list, resolve_config_value
 from src.asset_mgnt_report.services.progress import emit_progress, ensure_not_cancelled
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # 如需代理，请保留；否则可注释掉
 os.environ['http_proxy'] = 'http://127.0.0.1:7890'
@@ -65,6 +69,15 @@ fh.setFormatter(fmt)
 ch = logging.StreamHandler(sys.stdout)
 ch.setFormatter(fmt)
 logger.handlers = [fh, ch]
+
+# 顶部配置区（适合 Spyder 直接运行）
+# - old_date / new_date: 字符串，格式 YYYY-MM-DD，例如 2026-03-28
+# - markets: 列表，候选值为 CN/US/HK
+CONFIG = {
+    "old_date": None,
+    "new_date": None,
+    "markets": ["CN", "US", "HK"],
+}
 
 
 # retry 装饰函数: 实现重试机制。
@@ -478,43 +491,65 @@ def compute_index_caps(
 
 
 
-def main():
-    DATE_OLD = input("请输入旧日期（YYYY-MM-DD）：")  # 旧日期（含当天，若当天休市，将回溯至最近一交易日）
-    DATE_NEW = input("请输入新日期（YYYY-MM-DD）：")  # 新日期（含当天，同上规则）
+def main(
+    date_old: str | None = None,
+    date_new: str | None = None,
+    selected_markets: list[str] | None = None,
+):
+    DATE_OLD = resolve_config_value(
+        explicit=date_old,
+        env_key="AMR_GAINER_STOCK_OLD_DATE",
+        default=CONFIG["old_date"],
+        caster=lambda raw: raw,
+    ) or input("请输入旧日期（YYYY-MM-DD）：")
+    DATE_NEW = resolve_config_value(
+        explicit=date_new,
+        env_key="AMR_GAINER_STOCK_NEW_DATE",
+        default=CONFIG["new_date"],
+        caster=lambda raw: raw,
+    ) or input("请输入新日期（YYYY-MM-DD）：")
+    configured_markets = resolve_config_value(
+        explicit=selected_markets,
+        env_key="AMR_GAINER_STOCK_MARKETS",
+        default=CONFIG["markets"],
+        caster=parse_csv_list,
+    ) or ["CN", "US", "HK"]
+    normalized_markets = [market.upper() for market in configured_markets]
 
     logger.info(f"==== 开始计算（{DATE_OLD} vs {DATE_NEW}）====")
 
-    # ---- Constituents ----
-    logger.info("加载 S&P 500 名录 ...")
-    sp500_syms = get_sp500_symbols()
-    logger.info(f"S&P 500 数量：{len(sp500_syms)}")
-
-    logger.info("加载 恒生指数 名录（Excel） ...")
-    hsi_syms = get_hsi_symbols_from_excel()
-    logger.info(f"恒生指数 数量：{len(hsi_syms)}")
-
-    logger.info("加载 沪深300 名录（Excel）")
-    hs300_syms = get_hs300_symbols()
-    logger.info(f"沪深300 数量：{len(hs300_syms)}")
-
-    # ---- Compute caps ----
     caps = {}
+    cn_old = cn_new = us_old = us_new = hk_old = hk_new = None
 
-    logger.info("计算 标普500 自由流通市值 ...")
-    us_old, us_new = compute_index_caps(sp500_syms, DATE_OLD, DATE_NEW, "USD", "S&P 500")
-    caps["US"] = (us_old, us_new)
+    if "US" in normalized_markets:
+        logger.info("加载 S&P 500 名录 ...")
+        sp500_syms = get_sp500_symbols()
+        logger.info(f"S&P 500 数量：{len(sp500_syms)}")
+        logger.info("计算 标普500 自由流通市值 ...")
+        us_old, us_new = compute_index_caps(sp500_syms, DATE_OLD, DATE_NEW, "USD", "S&P 500")
+        caps["US"] = (us_old, us_new)
 
-    logger.info("计算 恒生指数 自由流通市值 ...")
-    hk_old, hk_new = compute_index_caps(hsi_syms, DATE_OLD, DATE_NEW, "HKD", "HSI")
-    caps["HK"] = (hk_old, hk_new)
+    if "HK" in normalized_markets:
+        logger.info("加载 恒生指数 名录（Excel） ...")
+        hsi_syms = get_hsi_symbols_from_excel()
+        logger.info(f"恒生指数 数量：{len(hsi_syms)}")
+        logger.info("计算 恒生指数 自由流通市值 ...")
+        hk_old, hk_new = compute_index_caps(hsi_syms, DATE_OLD, DATE_NEW, "HKD", "HSI")
+        caps["HK"] = (hk_old, hk_new)
 
-    logger.info("计算 沪深300 自由流通市值 ...")
-    cn_old, cn_new = compute_index_caps(hs300_syms, DATE_OLD, DATE_NEW, "CNY", "HS300")
-    caps["CN"] = (cn_old, cn_new)
+    if "CN" in normalized_markets:
+        logger.info("加载 沪深300 名录（Excel）")
+        hs300_syms = get_hs300_symbols()
+        logger.info(f"沪深300 数量：{len(hs300_syms)}")
+        logger.info("计算 沪深300 自由流通市值 ...")
+        cn_old, cn_new = compute_index_caps(hs300_syms, DATE_OLD, DATE_NEW, "CNY", "HS300")
+        caps["CN"] = (cn_old, cn_new)
 
     # ---- Output ----
     print("\n================ 结果汇总 ================\n")
     for k, unit, title in [("CN", "CNY", "沪深300"), ("US", "USD", "标普500"), ("HK", "HKD", "恒生指数")]:
+        if k not in caps:
+            continue
         old_v, new_v = caps.get(k, (None, None))
         gainer = (new_v - old_v) if (old_v is not None and new_v is not None) else None
         print(f"{title}（{DATE_OLD}）总市值（自由流通近似）：{_fmt_billions(old_v, unit)}")
@@ -523,26 +558,28 @@ def main():
         print("")
 
     # 返回（在交互式环境可用一个变量名接收）
-    Gainer = {
-        "HS300": {
+    Gainer = {}
+    if "CN" in caps:
+        Gainer["HS300"] = {
             "unit": "CNY",
             "date_old": DATE_OLD, "cap_old": cn_old,
             "date_new": DATE_NEW, "cap_new": cn_new,
             "gainer": (cn_new - cn_old) if (cn_old and cn_new) else None,
-        },
-        "SP500": {
+        }
+    if "US" in caps:
+        Gainer["SP500"] = {
             "unit": "USD",
             "date_old": DATE_OLD, "cap_old": us_old,
             "date_new": DATE_NEW, "cap_new": us_new,
             "gainer": (us_new - us_old) if (us_old and us_new) else None,
-        },
-        "HSI": {
+        }
+    if "HK" in caps:
+        Gainer["HSI"] = {
             "unit": "HKD",
             "date_old": DATE_OLD, "cap_old": hk_old,
             "date_new": DATE_NEW, "cap_new": hk_new,
             "gainer": (hk_new - hk_old) if (hk_old and hk_new) else None,
         }
-    }
 
     out_json = RAW_DIR / f"index_freefloat_caps_{DATE_OLD}_vs_{DATE_NEW}.json"
     with out_json.open("w", encoding="utf-8") as f:
@@ -554,5 +591,14 @@ def main():
     return Gainer
 
 
+def _build_arg_parser():
+    parser = argparse.ArgumentParser(description="计算股票指数自由流通市值 Gainer。")
+    parser.add_argument("--old-date", help="旧日期，格式 YYYY-MM-DD。")
+    parser.add_argument("--new-date", help="新日期，格式 YYYY-MM-DD。")
+    parser.add_argument("--markets", nargs="+", choices=["CN", "US", "HK"], help="指定要计算的市场。")
+    return parser
+
+
 if __name__ == "__main__":
-    Gainer = main()
+    args = _build_arg_parser().parse_args()
+    Gainer = main(date_old=args.old_date, date_new=args.new_date, selected_markets=args.markets)

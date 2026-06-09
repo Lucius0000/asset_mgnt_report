@@ -2,6 +2,7 @@
 计算股票指数的总市值，由 asset_stock_index.py 调用
 '''
 
+import argparse
 import pandas as pd
 import os
 import requests
@@ -21,6 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.asset_mgnt_report.config.defaults import build_app_config
+from src.asset_mgnt_report.config.inputs import parse_csv_list, resolve_config_value
 from src.asset_mgnt_report.services.progress import emit_progress, ensure_not_cancelled
 
 os.environ['http_proxy'] = 'http://127.0.0.1:7890'
@@ -29,6 +31,11 @@ os.environ['https_proxy'] = 'http://127.0.0.1:7890'
 APP_CONFIG = build_app_config(project_root=PROJECT_ROOT)
 SEED_DATA_DIR = APP_CONFIG.seed_data_dir
 RAW_OUTPUT_DIR = APP_CONFIG.raw_output_dir
+# 顶部配置区（适合 Spyder 直接运行）
+# - markets: 列表，候选值为 CN/US/HK
+CONFIG = {
+    "markets": ["CN", "US", "HK"],
+}
 
 
 # 日志初始化
@@ -553,13 +560,30 @@ def get_all_index_caps(progress_callback=None, cancel_check=None, selected_marke
     return results
 
 
-def main():
-    hs300_cap = get_hs300_cap()
-    print(f'沪深300总市值:{hs300_cap}')
-    hsi_cap = get_hsi_cap()
-    print(f'恒生指数总市值：{hsi_cap}')
-    spy_cap = get_spy_cap()
-    print(f'SPY总市值:{spy_cap}')
+def main(selected_markets=None):
+    markets = resolve_config_value(
+        explicit=selected_markets,
+        env_key="AMR_STOCK_CAP_MARKETS",
+        default=CONFIG["markets"],
+        caster=parse_csv_list,
+    ) or ["CN", "US", "HK"]
+    normalized = [market.upper() for market in markets]
+    if "CN" in normalized:
+        hs300_cap = get_hs300_cap()
+        print(f'沪深300总市值:{hs300_cap}')
+    if "HK" in normalized:
+        hsi_cap = get_hsi_cap()
+        print(f'恒生指数总市值：{hsi_cap}')
+    if "US" in normalized:
+        spy_cap = get_spy_cap()
+        print(f'SPY总市值:{spy_cap}')
+
+
+def _build_arg_parser():
+    parser = argparse.ArgumentParser(description="计算主要股票指数总市值。")
+    parser.add_argument("--markets", nargs="+", choices=["CN", "US", "HK"], help="指定市场列表。")
+    return parser
     
 if __name__ == '__main__':
-    main()
+    args = _build_arg_parser().parse_args()
+    main(selected_markets=args.markets)

@@ -5,8 +5,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.pipelines.secondary_market_report import main
+from scripts.pipelines.secondary_market_report import _build_arg_parser, main
 
 
 if __name__ == "__main__":
-    main()
+    args = _build_arg_parser().parse_args()
+    main(
+        market_mode=args.market_mode,
+        use_default_dates=args.use_default_dates,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        retry_attempts=args.retry_attempts,
+        max_workers=args.max_workers,
+    )

@@ -6,6 +6,7 @@ CPI 分析，输出：
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import sys
@@ -25,6 +26,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.asset_mgnt_report.config.defaults import build_app_config
+from src.asset_mgnt_report.config.inputs import parse_bool, resolve_config_value
 
 
 APP_CONFIG = build_app_config()
@@ -37,11 +39,17 @@ RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+# 顶部配置区（适合 Spyder 直接运行）
+# - debug: 布尔值，True / False；True 时额外打印中间数据
+CONFIG = {
+    "debug": False,
+}
 
 FRED_SERIES = {
-    "US_CPI": ("CPIAUCSL", "美国", "CPI", "fred"),
     "US_PCE": ("PCEPILFE", "美国", "核心 PCE", "fred"),
 }
+US_CPI_SA_SERIES = "CPIAUCSL"
+US_CPI_NSA_SERIES = "CPIAUCNS"
 CHINA_OFFICIAL_SOURCE = "china_nbs"
 CHINA_FALLBACK_SOURCE = "china_akshare_macro_china_cpi"
 CHINA_CACHE_SOURCE = "china_cache"
@@ -95,8 +103,16 @@ def _build_metrics_frame_from_index(index_df: pd.DataFrame, source: str) -> pd.D
     out["日期"] = pd.to_datetime(out["日期"], errors="coerce")
     out["指数"] = pd.to_numeric(out["指数"], errors="coerce")
     out = out.dropna(subset=["日期", "指数"]).sort_values("日期")
-    out["MoM"] = out["指数"].pct_change(1) * 100
-    out["YoY"] = out["指数"].pct_change(12) * 100
+    periods = out["日期"].dt.to_period("M")
+    values_by_period = dict(zip(periods, out["指数"]))
+    out["MoM"] = [
+        np.nan if values_by_period.get(period - 1) in (None, 0) else (current / values_by_period[period - 1] - 1) * 100
+        for period, current in zip(periods, out["指数"])
+    ]
+    out["YoY"] = [
+        np.nan if values_by_period.get(period - 12) in (None, 0) else (current / values_by_period[period - 12] - 1) * 100
+        for period, current in zip(periods, out["指数"])
+    ]
     out["数据源"] = source
     return out.reset_index(drop=True)
 
@@ -161,6 +177,18 @@ def _fetch_us_series_with_fred(series_id: str, source_name: str) -> pd.DataFrame
     if standardized.empty:
         raise ValueError(f"FRED 序列 {series_id} 标准化后为空。")
     return standardized
+
+
+def _fetch_us_cpi_with_fred() -> pd.DataFrame:
+    sa_metrics = _fetch_us_series_with_fred(US_CPI_SA_SERIES, "fred")
+    nsa_metrics = _fetch_us_series_with_fred(US_CPI_NSA_SERIES, "fred")
+    merged = sa_metrics.merge(
+        nsa_metrics[["日期", "YoY"]].rename(columns={"YoY": "YoY_NSA"}),
+        on="日期",
+        how="left",
+    )
+    merged["YoY"] = merged["YoY_NSA"].combine_first(merged["YoY"])
+    return merged.drop(columns=["YoY_NSA"])
 
 
 def _fallback_us_cpi() -> pd.DataFrame:
@@ -376,6 +404,12 @@ def _load_hk_local_fallback() -> pd.DataFrame:
 def get_cpi_data(time_range: int = 200) -> dict[str, pd.DataFrame]:
     data: dict[str, pd.DataFrame] = {}
 
+    try:
+        data["US_CPI"] = _fetch_us_cpi_with_fred().tail(time_range).reset_index(drop=True)
+    except Exception as exc:
+        logger.warning("美国 CPI 官方 FRED 失败，回退到 AkShare：%s", exc)
+        data["US_CPI"] = _fallback_us_cpi().tail(time_range).reset_index(drop=True)
+
     for key, (series_id, region, indicator, source_name) in FRED_SERIES.items():
         try:
             data[key] = _fetch_us_series_with_fred(series_id, source_name).tail(time_range).reset_index(drop=True)
@@ -385,13 +419,13 @@ def get_cpi_data(time_range: int = 200) -> dict[str, pd.DataFrame]:
             data[key] = fallback().tail(time_range).reset_index(drop=True)
 
     try:
-        data["CN_CPI"] = _fetch_china_cpi_from_nbs_official().tail(time_range).reset_index(drop=True)
+        data["CN_CPI"] = _fetch_china_cpi_from_akshare().tail(time_range).reset_index(drop=True)
     except Exception as exc:
-        logger.warning("中国 CPI 官方链路失败，回退到 AkShare macro_china_cpi(): %s", exc)
+        logger.warning("中国 CPI AkShare 链路失败，尝试国家统计局官方链路：%s", exc)
         try:
-            data["CN_CPI"] = _fetch_china_cpi_from_akshare().tail(time_range).reset_index(drop=True)
-        except Exception as fallback_exc:
-            logger.warning("中国 CPI AkShare 回退失败，尝试读取本地缓存：%s", fallback_exc)
+            data["CN_CPI"] = _fetch_china_cpi_from_nbs_official().tail(time_range).reset_index(drop=True)
+        except Exception as official_exc:
+            logger.warning("中国 CPI 国家统计局官方链路失败，尝试读取本地缓存：%s", official_exc)
             cache_path = RAW_DATA_DIR / "cpi_cn_cpi.xlsx"
             data["CN_CPI"] = _load_cached_cpi_frame(cache_path, CHINA_CACHE_SOURCE).tail(time_range).reset_index(drop=True)
 
@@ -522,13 +556,26 @@ def generate_report(debug: bool = False) -> pd.DataFrame:
     return formatted_df
 
 
-def main(debug: bool = False) -> None:
+def main(debug: bool | None = None) -> None:
+    resolved_debug = resolve_config_value(
+        explicit=debug,
+        env_key="AMR_CPI_DEBUG",
+        default=CONFIG["debug"],
+        caster=parse_bool,
+    )
     try:
-        generate_report(debug=debug)
+        generate_report(debug=bool(resolved_debug))
     except Exception as exc:
         logger.error("生成 CPI 报告时出错: %s", exc)
         raise
 
 
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="运行 CPI 报告。")
+    parser.add_argument("--debug", action="store_true", default=None, help="打印调试信息。")
+    return parser
+
+
 if __name__ == "__main__":
-    main()
+    args = _build_arg_parser().parse_args()
+    main(debug=args.debug)

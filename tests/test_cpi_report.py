@@ -34,6 +34,39 @@ def test_get_cpi_data_falls_back_to_akshare_for_china(monkeypatch) -> None:
     assert len(data["CN_CPI"]) == 24
 
 
+def test_fetch_us_cpi_with_fred_uses_sa_mom_and_nsa_yoy(monkeypatch) -> None:
+    dates = pd.date_range("2025-04-01", periods=13, freq="MS")
+    sa_values = [100.0] * 12 + [100.6]
+    nsa_values = [100.0] + [101.0] * 11 + [103.8]
+
+    def fake_fetch(series_id: str) -> pd.DataFrame:
+        values = sa_values if series_id == cpi_report.US_CPI_SA_SERIES else nsa_values
+        return pd.DataFrame({"日期": dates, "指数": values})
+
+    monkeypatch.setattr(cpi_report, "_fetch_fred_series", fake_fetch)
+
+    frame = cpi_report._fetch_us_cpi_with_fred()
+    latest = frame.iloc[-1]
+
+    assert round(float(latest["MoM"]), 2) == 0.60
+    assert round(float(latest["YoY"]), 2) == 3.80
+
+
+def test_index_metrics_use_calendar_month_alignment() -> None:
+    frame = pd.DataFrame(
+        {
+            "日期": pd.to_datetime(["2025-03-01", "2025-04-01", "2026-04-01"]),
+            "指数": [99.0, 100.0, 103.8],
+        }
+    )
+
+    metrics = cpi_report._build_metrics_frame_from_index(frame, "test")
+    latest = metrics.iloc[-1]
+
+    assert pd.isna(latest["MoM"])
+    assert round(float(latest["YoY"]), 2) == 3.80
+
+
 def test_fetch_hk_cpi_from_api_parses_documented_payload(monkeypatch) -> None:
     class FakeResponse:
         def raise_for_status(self) -> None:
@@ -144,29 +177,81 @@ def test_crypto_export_adds_generated_timestamp_row(tmp_path: Path) -> None:
 
     workbook = load_workbook(target)
     sheet = workbook.active
-    assert sheet["A1"].value == "当前时间"
-    assert isinstance(sheet["B1"].value, str)
-    assert sheet["A2"].value == "指标"
+    assert sheet["A1"].value == "指标"
+    assert sheet["B1"].value is None
+    assert sheet["C1"].value == "BTC"
 
 
-def test_bond_report_adds_generated_timestamp_row(monkeypatch, tmp_path: Path) -> None:
+def test_bond_report_removes_generated_timestamp_row(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(bond_report, "ROOT", tmp_path)
     monkeypatch.setattr(bond_report, "RAW_DIR", tmp_path / "output" / "raw_data")
     bond_report.RAW_DIR.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(bond_report, "_get_china_market_caps", lambda _date: ("1 B CNY", "2 B CNY", pd.DataFrame()))
-    monkeypatch.setattr(bond_report, "_get_china_volumes_30d", lambda: ("3 B CNY", "4 B CNY"))
+    monkeypatch.setattr(bond_report, "_get_china_volumes_30d", lambda *_args: ("3 B CNY", "4 B CNY"))
     monkeypatch.setattr(
         bond_report,
         "_get_cn_us_yield_metrics",
-        lambda: ((1.0, 2.0, 3.0, 0.4), (1.1, 2.1, 3.1, 0.5), (1.2, 2.2, 3.2, 0.6), (1.3, 2.3, 3.3, 0.7)),
+        lambda *_args: ((1.0, 2.0, 3.0, 0.4), (1.1, 2.1, 3.1, 0.5), (1.2, 2.2, 3.2, 0.6), (1.3, 2.3, 3.3, 0.7)),
     )
     monkeypatch.setattr(bond_report, "_get_us_market_caps", lambda: ("5 B USD", "6 B USD"))
-    monkeypatch.setattr(bond_report, "_resolve_sse_date", lambda: "20260410")
+    monkeypatch.setattr(bond_report, "_resolve_sse_date", lambda *_args: "20260410")
 
     bond_report.main(debug=False)
 
     workbook = load_workbook(tmp_path / "output" / "bonds.xlsx")
     sheet = workbook["bonds"]
-    assert sheet["A1"].value == "当前时间"
-    assert isinstance(sheet["B1"].value, str)
-    assert sheet["A2"].value == "指标类别"
+    assert sheet["A1"].value == "指标类别"
+    assert sheet["B1"].value == "中国"
+
+
+def test_bond_report_uses_cached_us_yields_when_fred_times_out(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(bond_report, "RAW_DIR", tmp_path)
+    dates = pd.date_range("2024-01-02", "2026-04-10", freq="B")
+    cn_us = pd.DataFrame(
+        {
+            "日期": dates,
+            "中国国债收益率:2年": [2.0] * len(dates),
+            "中国国债收益率:10年": [2.5] * len(dates),
+        }
+    )
+    cached_us = pd.DataFrame({"2Y": [0.04] * len(dates), "10Y": [0.045] * len(dates)}, index=dates)
+    cached_us.index.name = "Date"
+    cached_us.to_excel(tmp_path / "美债收益率_20260410.xlsx")
+
+    monkeypatch.setattr(bond_report.ak, "bond_zh_us_rate", lambda *args, **kwargs: cn_us)
+    monkeypatch.setattr(
+        bond_report.requests,
+        "get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("fred timeout")),
+    )
+
+    _, _, us2, us10 = bond_report._get_cn_us_yield_metrics("20260410")
+
+    assert us2[1] > 0
+    assert us10[1] > 0
+
+
+def test_bond_report_prefers_akshare_us_yields(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(bond_report, "RAW_DIR", tmp_path)
+    dates = pd.date_range("2024-01-02", "2026-04-10", freq="B")
+    cn_us = pd.DataFrame(
+        {
+            "日期": dates,
+            "中国国债收益率2年": [2.0] * len(dates),
+            "中国国债收益率10年": [2.5] * len(dates),
+            "美国国债收益率2年": [4.0] * len(dates),
+            "美国国债收益率10年": [4.5] * len(dates),
+        }
+    )
+
+    monkeypatch.setattr(bond_report.ak, "bond_zh_us_rate", lambda *args, **kwargs: cn_us)
+    monkeypatch.setattr(
+        bond_report.requests,
+        "get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("FRED should not be called")),
+    )
+
+    _, _, us2, us10 = bond_report._get_cn_us_yield_metrics("20260410")
+
+    assert us2[1] > 0
+    assert us10[1] > 0

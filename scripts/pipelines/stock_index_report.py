@@ -3,6 +3,7 @@
 输出股指表：stock_weekly_report.xlsx
 '''
 
+import argparse
 import akshare as ak
 import pandas as pd
 import numpy as np
@@ -24,6 +25,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from scripts.pipelines.stock_cap_report import get_all_index_caps
 from src.asset_mgnt_report.config.defaults import build_app_config
+from src.asset_mgnt_report.config.inputs import parse_bool, parse_csv_list, resolve_config_value
+from src.asset_mgnt_report.io.overall_seed_snapshot import upsert_sheet1_asset_metrics
 from src.asset_mgnt_report.metrics.annualization import annualized_return_from_prices
 from src.asset_mgnt_report.metrics.returns import compute_daily_returns
 from src.asset_mgnt_report.metrics.sharpe import sharpe_ratio as shared_sharpe_ratio
@@ -31,6 +34,15 @@ from src.asset_mgnt_report.metrics.volatility import annualized_volatility
 from src.asset_mgnt_report.services.progress import JobCancelledError, emit_progress, ensure_not_cancelled
 
 APP_CONFIG = build_app_config(project_root=PROJECT_ROOT)
+# 顶部配置区（适合 Spyder 直接运行）
+# - time_range: 整数，单位天，例如 30 / 365 / 2920
+# - debug: 布尔值，True / False
+# - stock_markets: 列表，候选值为 CN/US/HK
+CONFIG = {
+    "time_range": 2920,
+    "debug": False,
+    "stock_markets": ["CN", "US", "HK"],
+}
         
 
 # 设置日志
@@ -419,6 +431,17 @@ class StockIndexAnalyzer:
         if is_ratio:
             return f"{value:.2f}"
         return f"{value:.2f}"
+
+    @staticmethod
+    def parse_percent_text(value):
+        if value in (None, "", "N/A"):
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        text = str(value).strip().replace("％", "%")
+        if text.endswith("%"):
+            text = text[:-1]
+        return float(text)
     
     def print_summary_table(self, market_data: Dict[str, pd.DataFrame], time_range: int):
         """打印汇总表格"""
@@ -559,8 +582,19 @@ class StockIndexAnalyzer:
             output[("Sharpe Ratio", "中期（半年）")][display_name] = self.format_value(metrics['sharpe_ratio']['semi-annual_sharpe_ratio'], is_ratio=True)
             output[("Sharpe Ratio", "年度")][display_name] = self.format_value(metrics['sharpe_ratio']['annual_sharpe_ratio'], is_ratio=True)
             output[("Sharpe Ratio", "长期（5年）")][display_name] = self.format_value(metrics['sharpe_ratio']['5-year_sharpe_ratio'], is_ratio=True)
-    
+
             output[("", "PE Ratio")][display_name] = "-"
+            upsert_sheet1_asset_metrics(
+                region=display_name,
+                asset_class="股票权益",
+                fields={
+                    "月收益率年化 (%)": round(metrics["annualized_return"]["monthly_annualized_return"], 6),
+                    "年收益率 (%)": round(metrics["annualized_return"]["annual_annualized_return"], 6),
+                    "月波动率年化（%）": round(metrics["volatility"]["monthly_volatility"], 6),
+                    "总市值 ($)": cap,
+                },
+                config=APP_CONFIG,
+            )
     
         # 注意这里的 .T 必须加：把指标放到行索引
         stock_metrics_show = pd.DataFrame(output).T
@@ -589,7 +623,22 @@ class StockIndexAnalyzer:
         for row in ws.iter_rows(min_row=1, max_row=ws.max_row, max_col=ws.max_column):
             for cell in row:
                 cell.alignment = Alignment(vertical="center", horizontal="center", wrap_text=True)
-        
+
+        percent_categories = {"年化波动率", "年化增长率"}
+        percent_indicators = {"MoM (%)", "YoY (%)"}
+        for row_idx in range(3, ws.max_row + 1):
+            category = ws.cell(row=row_idx, column=1).value
+            indicator = ws.cell(row=row_idx, column=2).value
+            if category not in percent_categories and indicator not in percent_indicators:
+                continue
+            for col_idx in range(3, ws.max_column + 1):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                parsed = self.parse_percent_text(cell.value)
+                if parsed is None:
+                    continue
+                cell.value = parsed / 100.0
+                cell.number_format = "0.00%"
+
         # 合并“类别”列中相邻的相同值
         category_col = 1  # 第一列是“类别”
         merge_start = 2   # 从第二行开始（跳过标题）
@@ -737,21 +786,51 @@ class StockIndexAnalyzer:
                 print(f"\n{config.name} ({market}) - Data fetch failed")
 
 def main(
-    time_range: int = 2920,
-    debug: bool = False,
+    time_range: int | None = None,
+    debug: bool | None = None,
     progress_callback=None,
     cancel_check=None,
     stock_markets: list[str] | None = None,
 ):
     """主函数"""
+    resolved_time_range = resolve_config_value(
+        explicit=time_range,
+        env_key="AMR_STOCK_INDEX_TIME_RANGE",
+        default=CONFIG["time_range"],
+        caster=int,
+    )
+    resolved_debug = resolve_config_value(
+        explicit=debug,
+        env_key="AMR_STOCK_INDEX_DEBUG",
+        default=CONFIG["debug"],
+        caster=parse_bool,
+    )
+    resolved_stock_markets = resolve_config_value(
+        explicit=stock_markets,
+        env_key="AMR_STOCK_INDEX_MARKETS",
+        default=CONFIG["stock_markets"],
+        caster=parse_csv_list,
+    )
     analyzer = StockIndexAnalyzer(
-        debug=debug,
-        selected_markets=stock_markets,
+        debug=bool(resolved_debug),
+        selected_markets=resolved_stock_markets,
         progress_callback=progress_callback,
         cancel_check=cancel_check,
     )
-    analyzer.run_analysis(time_range=time_range)
+    analyzer.run_analysis(time_range=int(resolved_time_range))
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="运行股票权益周报。")
+    parser.add_argument("--time-range", type=int, help="回看天数，默认 2920。")
+    parser.add_argument("--debug", action="store_true", default=None, help="启用详细控制台输出。")
+    parser.add_argument("--stock-markets", nargs="+", choices=["CN", "US", "HK"], help="指定市场列表。")
+    return parser
 
 if __name__ == "__main__":
-    # 可以通过修改这里的参数来调整数据范围和调试模式
-    main(time_range=2920, debug=False)  # 2920 days ≈ 8 years 
+    args = _build_arg_parser().parse_args()
+    main(
+        time_range=args.time_range,
+        debug=args.debug,
+        stock_markets=args.stock_markets,
+    )

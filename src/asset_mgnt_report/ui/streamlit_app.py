@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from copy import deepcopy
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import io
 import os
 from pathlib import Path
@@ -46,7 +46,7 @@ GAINER_MODULE_LABELS = dict(gainer_entry.GAINER_MODULE_LABELS)
 HOME_CARDS = [
     ("main", "主报表工作台", "按模块执行周报主链路，适合日常更新。"),
     ("gainer", "Gainer 工作台", "输入日期与金价，稳定生成跨资产 Gainer 汇总。"),
-    ("secondary_market", "二级市场工作台", "单独运行中港股 / 美股 / 混合市场两周报表。"),
+    ("secondary_market", "二级市场工作台", "单独运行美股 / 中国A股 / 港股 / 混合市场两周报表。"),
     ("overall", "整体表工作台", "处理整体.xlsx 并输出整体_processed.xlsx。"),
     ("validation", "校验工作台", "对 main / codex 输出做回归对比，更新对比报告。"),
 ]
@@ -60,10 +60,15 @@ WORKSPACE_LABELS = {
 }
 SECONDARY_MARKET_MODE_OPTIONS: list[tuple[str, str]] = [
     ("us", "美股"),
-    ("china_hk", "中港股"),
+    ("china", "中国A股"),
+    ("hk", "港股"),
     ("mixed", "混合"),
 ]
 SECONDARY_MARKET_MODE_LABELS = {key: label for key, label in SECONDARY_MARKET_MODE_OPTIONS}
+LEGACY_SECONDARY_MARKET_MODE_MAP = {
+    "china_a": "china",
+    "china_hk": "china",
+}
 _JOB_LOCK = Lock()
 _JOB_REGISTRY: dict[str, dict[str, object]] = {}
 
@@ -372,6 +377,9 @@ def _ensure_state(config) -> None:
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
+    st.session_state["active_workspace"] = _normalize_workspace(st.session_state.get("active_workspace"))
+    _restore_gainer_inputs()
+    _restore_secondary_market_inputs()
 
 
 def _sanitize_text_path(value: object, default: str) -> str:
@@ -387,12 +395,8 @@ def _restore_overall_paths(config) -> None:
 def _restore_gainer_inputs() -> None:
     default_current_date = _current_week_saturday()
     default_previous_date = default_current_date - timedelta(days=14)
-    current_date = st.session_state.get("gainer_current_date", default_current_date)
-    previous_date = st.session_state.get("gainer_previous_date", default_previous_date)
-    if not isinstance(current_date, date):
-        current_date = default_current_date
-    if not isinstance(previous_date, date):
-        previous_date = default_previous_date
+    current_date = _coerce_session_date(st.session_state.get("gainer_current_date"), default_current_date)
+    previous_date = _coerce_session_date(st.session_state.get("gainer_previous_date"), default_previous_date)
     st.session_state["gainer_current_date"] = current_date
     st.session_state["gainer_previous_date"] = previous_date
     selected_modules = [
@@ -409,6 +413,87 @@ def _restore_gainer_inputs() -> None:
     st.session_state["gainer_previous_gold_price"] = str(
         st.session_state.get("gainer_previous_gold_price", "")
     ).strip()
+
+
+def _coerce_session_date(value: object, fallback: date) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return fallback
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            return fallback
+    return fallback
+
+
+def _coerce_session_bool(value: object, fallback: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+    return fallback
+
+
+def _normalize_secondary_market_mode(value: object) -> str:
+    raw_mode = str(value or "").strip().lower()
+    valid_modes = {key for key, _ in SECONDARY_MARKET_MODE_OPTIONS}
+    normalized_mode = LEGACY_SECONDARY_MARKET_MODE_MAP.get(raw_mode, raw_mode)
+    if normalized_mode not in valid_modes:
+        return "mixed"
+    return normalized_mode
+
+
+def _restore_secondary_market_inputs() -> None:
+    default_start_date, default_end_date = _default_secondary_market_dates()
+    st.session_state["secondary_market_mode"] = _normalize_secondary_market_mode(
+        st.session_state.get("secondary_market_mode", "mixed")
+    )
+    st.session_state["secondary_use_default_dates"] = _coerce_session_bool(
+        st.session_state.get("secondary_use_default_dates", True),
+        True,
+    )
+    st.session_state["secondary_start_date"] = _coerce_session_date(
+        st.session_state.get("secondary_start_date"),
+        default_start_date,
+    )
+    st.session_state["secondary_end_date"] = _coerce_session_date(
+        st.session_state.get("secondary_end_date"),
+        default_end_date,
+    )
+
+
+def _prepare_gainer_widget_state() -> None:
+    st.session_state["gainer_current_date_widget"] = _coerce_session_date(
+        st.session_state.get("gainer_current_date_widget", st.session_state.get("gainer_current_date")),
+        st.session_state["gainer_current_date"],
+    )
+    st.session_state["gainer_previous_date_widget"] = _coerce_session_date(
+        st.session_state.get("gainer_previous_date_widget", st.session_state.get("gainer_previous_date")),
+        st.session_state["gainer_previous_date"],
+    )
+
+
+def _prepare_secondary_market_widget_state() -> None:
+    st.session_state["secondary_market_mode_widget"] = _normalize_secondary_market_mode(
+        st.session_state.get("secondary_market_mode_widget", st.session_state.get("secondary_market_mode"))
+    )
+    st.session_state["secondary_start_date_widget"] = _coerce_session_date(
+        st.session_state.get("secondary_start_date_widget", st.session_state.get("secondary_start_date")),
+        st.session_state["secondary_start_date"],
+    )
+    st.session_state["secondary_end_date_widget"] = _coerce_session_date(
+        st.session_state.get("secondary_end_date_widget", st.session_state.get("secondary_end_date")),
+        st.session_state["secondary_end_date"],
+    )
 
 
 def _validate_gainer_date(field_key: str, label: str) -> date | None:
@@ -776,6 +861,18 @@ def _run_main_action() -> None:
 
 
 def _run_gainer_action() -> None:
+    default_current_date = _current_week_saturday()
+    default_previous_date = default_current_date - timedelta(days=14)
+    current_date = _coerce_session_date(
+        st.session_state.get("gainer_current_date_widget", st.session_state.get("gainer_current_date")),
+        default_current_date,
+    )
+    previous_date = _coerce_session_date(
+        st.session_state.get("gainer_previous_date_widget", st.session_state.get("gainer_previous_date")),
+        default_previous_date,
+    )
+    st.session_state["gainer_current_date"] = current_date
+    st.session_state["gainer_previous_date"] = previous_date
     selected_modules = list(st.session_state["gainer_modules"])
     if not selected_modules:
         st.session_state["result"] = {
@@ -839,12 +936,24 @@ def _run_gainer_action() -> None:
 
 
 def _run_secondary_market_action() -> None:
+    default_start_date, default_end_date = _default_secondary_market_dates()
+    market_mode = _normalize_secondary_market_mode(
+        st.session_state.get("secondary_market_mode_widget", st.session_state.get("secondary_market_mode", "mixed"))
+    )
+    start_date = _coerce_session_date(
+        st.session_state.get("secondary_start_date_widget", st.session_state.get("secondary_start_date")),
+        default_start_date,
+    )
+    end_date = _coerce_session_date(
+        st.session_state.get("secondary_end_date_widget", st.session_state.get("secondary_end_date")),
+        default_end_date,
+    )
+    st.session_state["secondary_market_mode"] = market_mode
+    st.session_state["secondary_start_date"] = start_date
+    st.session_state["secondary_end_date"] = end_date
     debug = bool(st.session_state["debug"])
     use_proxy = bool(st.session_state["use_proxy"])
-    market_mode = st.session_state.get("secondary_market_mode", "mixed")
     use_default_dates = bool(st.session_state.get("secondary_use_default_dates", True))
-    start_date = st.session_state.get("secondary_start_date")
-    end_date = st.session_state.get("secondary_end_date")
     if not use_default_dates:
         if not isinstance(start_date, date) or not isinstance(end_date, date):
             st.session_state["result"] = {
@@ -1174,6 +1283,7 @@ def _render_main_page() -> None:
 
 def _render_gainer_page() -> None:
     _restore_gainer_inputs()
+    _prepare_gainer_widget_state()
     _render_workspace_header("Gainer 工作台", "请选择两个周六日期并填写金价，页面会显示步骤进度与日志。")
     st.multiselect(
         "Gainer 子模块",
@@ -1203,12 +1313,12 @@ def _render_gainer_page() -> None:
     col1, col2 = st.columns(2)
     col1.date_input(
         "本周末日期（周六）",
-        key="gainer_current_date",
+        key="gainer_current_date_widget",
         help="请选择本周对应的周六日期。",
     )
     col2.date_input(
         "两周前日期（周六）",
-        key="gainer_previous_date",
+        key="gainer_previous_date_widget",
         help="请选择与本周末日期相差 14 天的周六日期。",
     )
     col3, col4 = st.columns(2)
@@ -1231,18 +1341,20 @@ def _render_gainer_page() -> None:
 
 
 def _render_secondary_market_page() -> None:
-    _render_workspace_header("二级市场工作台", "单独运行美股 / 中港股 / 混合二级市场两周报表。")
+    _restore_secondary_market_inputs()
+    _prepare_secondary_market_widget_state()
+    _render_workspace_header("二级市场工作台", "单独运行美股 / 中国A股 / 港股 / 混合二级市场两周报表。")
     st.selectbox(
         "市场模式",
         options=[key for key, _ in SECONDARY_MARKET_MODE_OPTIONS],
-        key="secondary_market_mode",
+        key="secondary_market_mode_widget",
         format_func=lambda key: f"{SECONDARY_MARKET_MODE_LABELS[key]} · {key}",
     )
     st.checkbox("使用智能默认日期", key="secondary_use_default_dates")
     date_disabled = bool(st.session_state.get("secondary_use_default_dates", True))
     col1, col2 = st.columns(2)
-    col1.date_input("开始日期", key="secondary_start_date", disabled=date_disabled)
-    col2.date_input("结束日期", key="secondary_end_date", disabled=date_disabled)
+    col1.date_input("开始日期", key="secondary_start_date_widget", disabled=date_disabled)
+    col2.date_input("结束日期", key="secondary_end_date_widget", disabled=date_disabled)
     if st.button("执行二级市场报表", key="run-secondary-market", type="primary", use_container_width=True):
         _run_secondary_market_action()
     _render_result_panel()

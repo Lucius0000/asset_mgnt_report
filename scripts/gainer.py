@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import argparse
 from datetime import date, datetime, timedelta
 from pathlib import Path
 import os
@@ -21,7 +22,8 @@ import pandas as pd
 
 from scripts.pipelines import gainer_bond, gainer_btc, gainer_gold, gainer_stock
 from src.asset_mgnt_report.config.defaults import build_app_config
-from src.asset_mgnt_report.config.inputs import resolve_config_value
+from src.asset_mgnt_report.config.inputs import parse_csv_list, resolve_config_value
+from src.asset_mgnt_report.io.overall_seed_snapshot import upsert_sheet1_asset_metrics
 from src.asset_mgnt_report.services.progress import emit_progress, ensure_not_cancelled
 
 OUTPUT_PATH = PROJECT_ROOT / "output" / "Gainer.xlsx"
@@ -41,6 +43,17 @@ STOCK_MARKET_OPTIONS: tuple[tuple[str, str], ...] = (
 )
 STOCK_MARKET_LABELS = {key: label for key, label in STOCK_MARKET_OPTIONS}
 
+# 顶部配置区（适合 Spyder 直接运行）
+# - 支持的统一调度模块:
+#   stocks -> scripts/pipelines/gainer_stock.py
+#   bonds -> scripts/pipelines/gainer_bond.py
+#   gold -> scripts/pipelines/gainer_gold.py
+#   btc -> scripts/pipelines/gainer_btc.py
+# - current_date / previous_date: 字符串或 datetime，格式 YYYY-MM-DD，例如 2026-04-11；两者都应为周六
+# - current_gold_price / previous_gold_price: 浮点数，单位 USD/oz，例如 3240.5；仅 gold 子链路使用
+# - modules: 列表，候选值为 stocks/bonds/gold/btc
+# - stock_markets: 列表，候选值为 CN/US/HK；仅 stocks 子链路使用
+# - output_path: 路径对象或字符串；相对路径默认相对项目根目录
 CONFIG = {
     "current_date": None,
     "previous_date": None,
@@ -296,68 +309,117 @@ def _compute_gold_caps(previous_price: float, current_price: float) -> Tuple[flo
 
 
 def main(
+    current_date: str | date | datetime | None = None,
+    previous_date: str | date | datetime | None = None,
+    current_gold_price: float | None = None,
+    previous_gold_price: float | None = None,
     modules: list[str] | None = None,
     stock_markets: list[str] | None = None,
     output_path: str | Path | None = None,
     progress_callback=None,
     cancel_check=None,
 ) -> None:
-    selected_modules = modules or _prompt_choice_list(
-        prompt="请输入要运行的 Gainer 子模块",
-        default=[key for key, _ in GAINER_MODULE_OPTIONS],
-        options=GAINER_MODULE_OPTIONS,
-        explicit=CONFIG["modules"],
+    resolved_modules = resolve_config_value(
+        explicit=modules,
         env_key="AMR_GAINER_MODULES",
+        default=CONFIG["modules"],
+        caster=parse_csv_list,
     )
+    selected_modules = _normalize_choice_list(resolved_modules, GAINER_MODULE_OPTIONS) if resolved_modules is not None else []
+    if not selected_modules:
+        selected_modules = _prompt_choice_list(
+            prompt="请输入要运行的 Gainer 子模块",
+            default=[key for key, _ in GAINER_MODULE_OPTIONS],
+            options=GAINER_MODULE_OPTIONS,
+            explicit=CONFIG["modules"],
+            env_key="AMR_GAINER_MODULES",
+        )
     if not selected_modules:
         raise ValueError("至少需要选择一个 Gainer 子模块。")
 
     selected_stock_markets: list[str] = []
     if "stocks" in selected_modules:
-        selected_stock_markets = stock_markets or _prompt_choice_list(
-            prompt="请输入股票子模块需要运行的市场",
-            default=[key for key, _ in STOCK_MARKET_OPTIONS],
-            options=STOCK_MARKET_OPTIONS,
-            explicit=CONFIG["stock_markets"],
+        resolved_stock_markets = resolve_config_value(
+            explicit=stock_markets,
             env_key="AMR_GAINER_STOCK_MARKETS",
+            default=CONFIG["stock_markets"],
+            caster=parse_csv_list,
         )
+        selected_stock_markets = _normalize_choice_list(resolved_stock_markets, STOCK_MARKET_OPTIONS) if resolved_stock_markets is not None else []
+        if not selected_stock_markets:
+            selected_stock_markets = _prompt_choice_list(
+                prompt="请输入股票子模块需要运行的市场",
+                default=[key for key, _ in STOCK_MARKET_OPTIONS],
+                options=STOCK_MARKET_OPTIONS,
+                explicit=CONFIG["stock_markets"],
+                env_key="AMR_GAINER_STOCK_MARKETS",
+            )
         if not selected_stock_markets:
             raise ValueError("股票子模块至少需要选择一个市场。")
 
     default_current, default_previous = default_gainer_dates()
-    current_date = _prompt_date(
-        f"请输入本周末日期（YYYY-MM-DD，周六），回车默认 {default_current:%Y-%m-%d}:",
-        default=default_current,
+    resolved_current_date = resolve_config_value(
+        explicit=current_date,
+        env_key="AMR_GAINER_CURRENT_DATE",
+        default=CONFIG["current_date"],
+        caster=lambda raw: raw,
     )
-    _ensure_saturday(current_date, "本周末日期")
-    explicit_previous = CONFIG["previous_date"] is not None or os.getenv("AMR_GAINER_PREVIOUS_DATE")
+    if resolved_current_date is not None:
+        current_dt = _coerce_date_like(resolved_current_date)
+    else:
+        current_dt = _prompt_date(
+            f"请输入本周末日期（YYYY-MM-DD，周六），回车默认 {default_current:%Y-%m-%d}:",
+            default=default_current,
+        )
+    _ensure_saturday(current_dt, "本周末日期")
+    explicit_previous = previous_date is not None or CONFIG["previous_date"] is not None or os.getenv("AMR_GAINER_PREVIOUS_DATE")
     if not explicit_previous:
-        default_previous = current_date - timedelta(days=14)
-    previous_date = _prompt_date(
-        f"请输入两周前周末日期（YYYY-MM-DD，周六，回车默认 {default_previous:%Y-%m-%d}）：",
-        default=default_previous,
+        default_previous = current_dt - timedelta(days=14)
+    resolved_previous_date = resolve_config_value(
+        explicit=previous_date,
+        env_key="AMR_GAINER_PREVIOUS_DATE",
+        default=CONFIG["previous_date"],
+        caster=lambda raw: raw,
     )
-    _ensure_saturday(previous_date, "两周前日期")
-    if (current_date - previous_date).days != 14:
+    if resolved_previous_date is not None:
+        previous_dt = _coerce_date_like(resolved_previous_date)
+    else:
+        previous_dt = _prompt_date(
+            f"请输入两周前周末日期（YYYY-MM-DD，周六，回车默认 {default_previous:%Y-%m-%d}）：",
+            default=default_previous,
+        )
+    _ensure_saturday(previous_dt, "两周前日期")
+    if (current_dt - previous_dt).days != 14:
         raise ValueError("两周前日期需要与本周末日期相差 14 天，且两者都必须是周六。")
 
-    current_gold_price = previous_gold_price = None
+    resolved_current_gold_price = resolve_config_value(
+        explicit=current_gold_price,
+        env_key="AMR_GOLD_CURRENT_PRICE",
+        default=CONFIG["current_gold_price"],
+        caster=float,
+    )
+    resolved_previous_gold_price = resolve_config_value(
+        explicit=previous_gold_price,
+        env_key="AMR_GOLD_PREVIOUS_PRICE",
+        default=CONFIG["previous_gold_price"],
+        caster=float,
+    )
     if "gold" in selected_modules:
         print("\n请提供 LBMA Gold Price PM（USD/oz）")
         print("src: https://www.lbma.org.uk/cn/prices-and-data#/")
-        current_gold_price = gainer_gold._prompt_price(
+        resolved_current_gold_price = gainer_gold._prompt_price(
             "本周末价格：",
             env_key="AMR_GOLD_CURRENT_PRICE",
-            configured=CONFIG["current_gold_price"],
+            configured=resolved_current_gold_price,
         )
-        previous_gold_price = gainer_gold._prompt_price(
+        resolved_previous_gold_price = gainer_gold._prompt_price(
             "两周前周末价格：",
             env_key="AMR_GOLD_PREVIOUS_PRICE",
-            configured=CONFIG["previous_gold_price"],
+            configured=resolved_previous_gold_price,
         )
     
-    date_old_str = previous_date.strftime("%Y-%m-%d")
-    date_new_str = current_date.strftime("%Y-%m-%d")
+    date_old_str = previous_dt.strftime("%Y-%m-%d")
+    date_new_str = current_dt.strftime("%Y-%m-%d")
 
     step_templates = {
         "stocks": "股票市值",
@@ -400,11 +462,11 @@ def main(
                 cancel_check=cancel_check,
             )
         elif module_name == "bonds":
-            bond_caps = _compute_bond_caps(current_date, previous_date)
+            bond_caps = _compute_bond_caps(current_dt, previous_dt)
         elif module_name == "gold":
-            gold_prev, gold_curr = _compute_gold_caps(previous_gold_price, current_gold_price)
+            gold_prev, gold_curr = _compute_gold_caps(resolved_previous_gold_price, resolved_current_gold_price)
         elif module_name == "btc":
-            btc_prev, btc_curr = _compute_btc_caps(previous_date, current_date)
+            btc_prev, btc_curr = _compute_btc_caps(previous_dt, current_dt)
         completed_labels.append(step_label)
         emit_progress(
             progress_callback,
@@ -436,6 +498,12 @@ def main(
                     str(market_caps["unit"]),
                 ),
             })
+            upsert_sheet1_asset_metrics(
+                region=stock_region_labels[market],
+                asset_class="股票权益",
+                fields={"Gainer": rows[-1]["Gainer"]},
+                config=APP_CONFIG,
+            )
 
     if "bonds" in selected_modules:
         us_bond_prev = bond_caps["US"]["previous"]
@@ -453,6 +521,12 @@ def main(
                 decimals=0,
             ),
         })
+        upsert_sheet1_asset_metrics(
+            region="美国",
+            asset_class="债券固收",
+            fields={"Gainer": rows[-1]["Gainer"]},
+            config=APP_CONFIG,
+        )
 
         cn_bond_prev = bond_caps["CN"]["previous"]
         cn_bond_curr = bond_caps["CN"]["current"]
@@ -466,6 +540,12 @@ def main(
                 "CNY",
             ),
         })
+        upsert_sheet1_asset_metrics(
+            region="中国",
+            asset_class="债券固收",
+            fields={"Gainer": rows[-1]["Gainer"]},
+            config=APP_CONFIG,
+        )
 
     if "gold" in selected_modules:
         gold_prev_b = _to_billions(gold_prev)
@@ -480,6 +560,15 @@ def main(
                 "USD",
             ),
         })
+        upsert_sheet1_asset_metrics(
+            region="商品与贵金属（黄金）",
+            asset_class=None,
+            fields={
+                "Gainer": rows[-1]["Gainer"],
+                "总市值 ($)": rows[-1]["Market Cap This week"],
+            },
+            config=APP_CONFIG,
+        )
 
     if "btc" in selected_modules:
         btc_prev_b = _to_billions(btc_prev)
@@ -494,9 +583,21 @@ def main(
                 "USD",
             ),
         })
+        upsert_sheet1_asset_metrics(
+            region="数字货币（BTC）",
+            asset_class=None,
+            fields={"Gainer": rows[-1]["Gainer"]},
+            config=APP_CONFIG,
+        )
 
     df = pd.DataFrame(rows, columns=["区域", "资产大类", "Market Cap Last 2 week", "Market Cap This week", "Gainer"])
-    target_output = Path(output_path or CONFIG["output_path"] or OUTPUT_PATH)
+    resolved_output = resolve_config_value(
+        explicit=output_path,
+        env_key="AMR_GAINER_OUTPUT_PATH",
+        default=CONFIG["output_path"],
+        caster=lambda raw: raw,
+    )
+    target_output = Path(resolved_output or OUTPUT_PATH)
     if not target_output.is_absolute():
         target_output = PROJECT_ROOT / target_output
     target_output.parent.mkdir(parents=True, exist_ok=True)
@@ -504,5 +605,26 @@ def main(
     print(f"\n整合结果已保存至：{target_output}")
 
 
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Gainer 统一入口。")
+    parser.add_argument("--current-date", help="本周末日期，格式 YYYY-MM-DD，需为周六。")
+    parser.add_argument("--previous-date", help="两周前日期，格式 YYYY-MM-DD，需为周六。")
+    parser.add_argument("--current-gold-price", type=float, help="本周末黄金价格。")
+    parser.add_argument("--previous-gold-price", type=float, help="两周前黄金价格。")
+    parser.add_argument("--modules", nargs="+", choices=[key for key, _ in GAINER_MODULE_OPTIONS], help="指定 Gainer 子模块。")
+    parser.add_argument("--stock-markets", nargs="+", choices=[key for key, _ in STOCK_MARKET_OPTIONS], help="指定股票子模块市场。")
+    parser.add_argument("--output-path", help="输出文件路径。")
+    return parser
+
+
 if __name__ == "__main__":
-    main()
+    args = _build_arg_parser().parse_args()
+    main(
+        current_date=args.current_date,
+        previous_date=args.previous_date,
+        current_gold_price=args.current_gold_price,
+        previous_gold_price=args.previous_gold_price,
+        modules=args.modules,
+        stock_markets=args.stock_markets,
+        output_path=args.output_path,
+    )

@@ -5,6 +5,7 @@
 输出计算日志：output/interest_rate.log
 """
 
+import argparse
 import akshare as ak
 import pandas as pd
 import numpy as np
@@ -15,12 +16,24 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import warnings
 import requests
+from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.asset_mgnt_report.config.defaults import build_app_config
+from src.asset_mgnt_report.config.inputs import parse_bool, resolve_config_value
 
 warnings.filterwarnings("ignore")
 
 APP_CONFIG = build_app_config()
+# 顶部配置区（适合 Spyder 直接运行）
+# - debug: 布尔值，True / False；True 时打印调试信息并写详细日志
+CONFIG = {
+    "debug": False,
+}
 
 # ----------------------------
 # 日志配置：文件(仅debug=True) + 控制台
@@ -514,15 +527,21 @@ def generate_report():
 
     return formatted_rate_df
 
-def main(debug: bool = False):
+def main(debug: bool | None = None):
     try:
         global logger
-        logger = _setup_logger(debug)
+        resolved_debug = resolve_config_value(
+            explicit=debug,
+            env_key="AMR_INTEREST_RATE_DEBUG",
+            default=CONFIG["debug"],
+            caster=parse_bool,
+        )
+        logger = _setup_logger(bool(resolved_debug))
 
         formatted_rate_df = generate_report()
 
         # 非调试模式：仅在控制台输出最终结果表，不保存过程日志
-        if not debug:
+        if not resolved_debug:
             print("\n3. 利率分析")
             print("-"*30)
             print(formatted_rate_df)
@@ -531,5 +550,12 @@ def main(debug: bool = False):
         # 即使在非调试模式下也输出错误到控制台
         logger.error("生成报告时出错: %s", str(e))
 
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="运行利率报告。")
+    parser.add_argument("--debug", action="store_true", default=None, help="打印调试信息并记录详细日志。")
+    return parser
+
 if __name__ == "__main__":
-    main(debug=False)
+    args = _build_arg_parser().parse_args()
+    main(debug=args.debug)

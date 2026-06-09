@@ -1,11 +1,21 @@
+import argparse
+from pathlib import Path
+import sys
+
 from pycoingecko import CoinGeckoAPI
 import pandas as pd
 from datetime import datetime, timedelta, timezone
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.asset_mgnt_report.config.inputs import resolve_config_value
 
 cg = CoinGeckoAPI()
 
+# 顶部配置区（适合 Spyder 直接运行）
+# - old_date / new_date: 字符串，格式 YYYY-MM-DD，例如 2026-03-28
 CONFIG = {
     "old_date": None,
     "new_date": None,
@@ -71,11 +81,14 @@ mcap_new = None
 Gainer = None
 
 
-def main():
+def main(
+    old_date: str | None = None,
+    new_date: str | None = None,
+):
     global mcap_old, mcap_new, Gainer
 
-    old_date_str = resolve_config_value(explicit=CONFIG["old_date"], env_key="AMR_BTC_OLD_DATE") or input("请输入【旧日期】(YYYY-MM-DD): ").strip()
-    new_date_str = resolve_config_value(explicit=CONFIG["new_date"], env_key="AMR_BTC_NEW_DATE") or input("请输入【新日期】(YYYY-MM-DD): ").strip()
+    old_date_str = resolve_config_value(explicit=old_date, default=CONFIG["old_date"]) or resolve_config_value(env_key="AMR_BTC_OLD_DATE") or input("请输入【旧日期】(YYYY-MM-DD): ").strip()
+    new_date_str = resolve_config_value(explicit=new_date, default=CONFIG["new_date"]) or resolve_config_value(env_key="AMR_BTC_NEW_DATE") or input("请输入【新日期】(YYYY-MM-DD): ").strip()
 
     try:
         old_date = datetime.strptime(old_date_str, "%Y-%m-%d").date()
@@ -98,5 +111,13 @@ def main():
     return Gainer
 
 
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="计算 BTC 市值 Gainer。")
+    parser.add_argument("--old-date", help="旧日期，格式 YYYY-MM-DD。")
+    parser.add_argument("--new-date", help="新日期，格式 YYYY-MM-DD。")
+    return parser
+
+
 if __name__ == "__main__":
-    main()
+    args = _build_arg_parser().parse_args()
+    main(old_date=args.old_date, new_date=args.new_date)

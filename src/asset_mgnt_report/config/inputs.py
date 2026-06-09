@@ -20,3 +20,11 @@ def resolve_config_value(
         if raw not in (None, ""):
             return caster(raw) if caster else raw  # type: ignore[return-value]
     return default
+
+
+def parse_bool(raw: str) -> bool:
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def parse_csv_list(raw: str) -> list[str]:
+    return [token.strip() for token in raw.replace("，", ",").split(",") if token.strip()]

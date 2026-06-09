@@ -4,6 +4,7 @@
 其他数据暂不输出（已注释）
 '''
 
+import argparse
 import akshare as ak
 import pandas as pd
 import numpy as np
@@ -12,8 +13,15 @@ from datetime import datetime
 import logging
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.asset_mgnt_report.config.defaults import build_app_config
+from src.asset_mgnt_report.config.inputs import parse_bool, resolve_config_value
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -22,6 +30,11 @@ warnings.filterwarnings("ignore")
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+# 顶部配置区（适合 Spyder 直接运行）
+# - debug: 布尔值，True / False；True 时打印末尾样例数据
+CONFIG = {
+    "debug": False,
+}
 
 APP_CONFIG = build_app_config()
 
@@ -212,7 +225,13 @@ def plot_currency_spreads(spread_df, output_path=None):
     plt.close()
 
 
-def main(debug=False):
+def main(debug=None):
+    resolved_debug = resolve_config_value(
+        explicit=debug,
+        env_key="AMR_CARRY_TRADE_DEBUG",
+        default=CONFIG["debug"],
+        caster=parse_bool,
+    )
     print("\n4. 利差分析")
     print("-"*30)
 
@@ -236,6 +255,15 @@ def main(debug=False):
     if spread_df is not None:
         # spread_df.to_excel("output/currency_spreads.xlsx", index=False)
         plot_currency_spreads(spread_df)
+        if resolved_debug:
+            print(spread_df.tail())
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="运行利差分析报告。")
+    parser.add_argument("--debug", action="store_true", default=None, help="打印末尾数据样例。")
+    return parser
 
 if __name__ == "__main__":
-    main()
+    args = _build_arg_parser().parse_args()
+    main(debug=args.debug)

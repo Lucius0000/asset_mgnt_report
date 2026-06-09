@@ -698,7 +698,7 @@ class StockIndexAnalyzer:
         raw_path.mkdir(parents=True, exist_ok=True)
         
         stock_metrics = pd.DataFrame(rows)
-        stock_metrics.to_excel(raw_path / "stock_metrics.xlsx", index=False)     
+        stock_metrics.to_excel(raw_path / "stock_metrics.xlsx", index=False)
         
     
     def run_analysis(self, time_range: int = 2920):

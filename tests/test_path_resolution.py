@@ -62,6 +62,53 @@ def test_secondary_market_exports_resolve_to_project_root(monkeypatch) -> None:
     assert saved_paths[0].parent == secondary_market_report.APP_CONFIG.output_dir
 
 
+def test_secondary_market_summary_respects_category_order(monkeypatch) -> None:
+    saved_workbooks = []
+
+    def fake_save(self, _filename):
+        saved_workbooks.append(self)
+
+    def metrics(symbol: str, market_region: str) -> dict:
+        return {
+            "market_region": market_region,
+            "symbol": symbol,
+            "two_week_return": 1.0,
+            "ytd_rate": 2.0,
+            "mom_rate": 3.0,
+            "yoy_rate": 4.0,
+            "latest_close": 10.0,
+            "market_cap": 100.0,
+            "dividend_yield": 1.5,
+            "sharp_ratio": 0.8,
+            "annualized_volatility": 12.0,
+        }
+
+    categories = {
+        "大盘": ["SPY"],
+        "中国A股-Smart Beta-中盘": ["南方中证500ETF"],
+        "港股-Smart Beta-红利": ["平安香港高息ETF"],
+    }
+
+    monkeypatch.setattr(secondary_market_report.Workbook, "save", fake_save)
+    secondary_market_report.export_to_excel_by_category(
+        data={
+            "平安香港高息ETF": metrics("3070.HK", "港股"),
+            "南方中证500ETF": metrics("510500.SS", "中国A股"),
+            "SPY": metrics("SPY", "美股"),
+        },
+        categories=categories,
+        report_prefix="mixed_market_report",
+        market_type="混合",
+        end_date=secondary_market_report.datetime(2026, 4, 18),
+    )
+
+    assert saved_workbooks
+    wb = saved_workbooks[0]
+    assert wb.sheetnames[:4] == ["汇总", "大盘", "中国A股_Smart Beta_中盘", "港股_Smart Beta_红利"]
+    summary_categories = [wb["汇总"].cell(row=row, column=1).value for row in range(2, 5)]
+    assert summary_categories == list(categories)
+
+
 def test_secondary_market_supports_split_china_and_hk_modes() -> None:
     china_symbols, china_categories, china_market_type, china_prefix = secondary_market_report.resolve_market_selection("china")
     assert china_market_type == "中国A股"
@@ -88,6 +135,7 @@ def test_secondary_market_supports_split_china_and_hk_modes() -> None:
     assert "大盘" in hk_categories
     assert hk_categories["Smart Beta-红利"] == ["平安香港高息ETF", "恒生高息股30ETF"]
     assert "个股-互联网" in hk_categories
+    assert list(hk_categories)[-1] == "Smart Beta-红利"
 
 
 def test_secondary_market_sheet_title_sanitizes_invalid_characters() -> None:
@@ -136,17 +184,23 @@ def test_secondary_market_does_not_color_close_column() -> None:
     assert ws["C2"].fill.fill_type == "solid"
 
 
-def test_secondary_market_mixed_mode_merges_same_named_categories() -> None:
+def test_secondary_market_mixed_mode_keeps_market_category_order() -> None:
     mixed_symbols, mixed_categories, mixed_market_type, mixed_prefix = secondary_market_report.resolve_market_selection("mixed")
     assert mixed_market_type == "混合"
     assert mixed_prefix == "mixed_market_report"
     assert "中国平安" in mixed_symbols
-    assert secondary_market_report.get_category_for_symbol("中国平安", mixed_categories) == "个股-金融"
-    assert secondary_market_report.get_category_for_symbol("宁德时代", mixed_categories) == "个股-新能源"
-    assert secondary_market_report.get_category_for_symbol("南方中证500ETF", mixed_categories) == "Smart Beta-中盘"
-    assert secondary_market_report.get_category_for_symbol("南方中证1000ETF", mixed_categories) == "Smart Beta-小盘"
+    assert secondary_market_report.get_category_for_symbol("中国平安", mixed_categories) == "中国A股-个股-金融"
+    assert secondary_market_report.get_category_for_symbol("宁德时代", mixed_categories) == "中国A股-个股-新能源"
+    assert secondary_market_report.get_category_for_symbol("南方中证500ETF", mixed_categories) == "中国A股-Smart Beta-中盘"
+    assert secondary_market_report.get_category_for_symbol("南方中证1000ETF", mixed_categories) == "中国A股-Smart Beta-小盘"
+    assert secondary_market_report.get_category_for_symbol("平安香港高息ETF", mixed_categories) == "港股-Smart Beta-红利"
     assert "SPY" in mixed_categories["大盘"]
-    assert "华泰柏瑞沪深300ETF" in mixed_categories["大盘"]
-    assert "南方中证500ETF" not in mixed_categories["大盘"]
-    assert "南方中证1000ETF" not in mixed_categories["大盘"]
-    assert "恒生指数盈富基金" in mixed_categories["大盘"]
+    assert "华泰柏瑞沪深300ETF" in mixed_categories["中国A股-大盘"]
+    assert "南方中证500ETF" not in mixed_categories["中国A股-大盘"]
+    assert "南方中证1000ETF" not in mixed_categories["中国A股-大盘"]
+    assert "恒生指数盈富基金" in mixed_categories["港股-大盘"]
+
+    category_order = list(mixed_categories)
+    assert category_order.index("中国A股-Smart Beta-中盘") == category_order.index("中国A股-个股-金属") + 1
+    assert category_order.index("中国A股-Smart Beta-小盘") == category_order.index("中国A股-Smart Beta-中盘") + 1
+    assert category_order.index("港股-Smart Beta-红利") == len(category_order) - 1

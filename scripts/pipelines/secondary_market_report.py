@@ -422,7 +422,6 @@ hk_market_symbols = {
 hk_categories = {
     '大盘': ['恒生指数盈富基金'],
     '行业-科技': ['华夏恒生科技ETF'],
-    'Smart Beta-红利': ['平安香港高息ETF', '恒生高息股30ETF'],
     '个股-金融': ['汇丰控股', '友邦保险'],
     '个股-地产': ['新鸿基地产', '领展房产基金'],
     '个股-公用事业': ['中电控股', '香港中华煤气'],
@@ -430,6 +429,7 @@ hk_categories = {
     '个股-互联网': ['腾讯控股', '阿里巴巴', '美团'],
     '个股-新能源': ['比亚迪H'],
     '个股-半导体': ['中芯国际H'],
+    'Smart Beta-红利': ['平安香港高息ETF', '恒生高息股30ETF'],
 }
 
 
@@ -449,6 +449,18 @@ def _merge_category_maps(*maps: dict[str, list[str]]) -> dict[str, list[str]]:
                 if symbol not in bucket:
                     bucket.append(symbol)
     return merged
+
+
+def _prefix_category_names(region: str, category_map: dict[str, list[str]]) -> dict[str, list[str]]:
+    return {f"{region}-{category}": list(symbols) for category, symbols in category_map.items()}
+
+
+def _build_mixed_categories() -> dict[str, list[str]]:
+    return _merge_category_maps(
+        us_categories,
+        _prefix_category_names("中国A股", china_categories),
+        _prefix_category_names("港股", hk_categories),
+    )
 
 
 MARKET_MODE_SPECS = {
@@ -472,7 +484,7 @@ MARKET_MODE_SPECS = {
     },
     'mixed': {
         'symbols': _merge_symbol_maps(us_market_symbols, china_market_symbols, hk_market_symbols),
-        'categories': _merge_category_maps(us_categories, china_categories, hk_categories),
+        'categories': _build_mixed_categories(),
         'market_type': '混合',
         'report_prefix': 'mixed_market_report',
     },
@@ -1309,6 +1321,18 @@ def get_category_for_symbol(symbol, categories):
     return "其他"
 
 
+def _ordered_data_by_categories(data: dict[str, dict], categories: dict[str, list[str]]) -> dict[str, dict]:
+    ordered: dict[str, dict] = {}
+    for symbols in categories.values():
+        for symbol in symbols:
+            if symbol in data and symbol not in ordered:
+                ordered[symbol] = data[symbol]
+    for symbol, values in data.items():
+        if symbol not in ordered:
+            ordered[symbol] = values
+    return ordered
+
+
 def should_include_market_region(market_type: str) -> bool:
     return market_type == "混合"
 
@@ -1335,6 +1359,7 @@ def _format_report_frame(df: pd.DataFrame) -> pd.DataFrame:
 
 def export_to_excel_by_category(data, categories, report_prefix, market_type, end_date):
     """将数据按分类导出为Excel文件，并设置单元格样式和颜色填充"""
+    ordered_data = _ordered_data_by_categories(data, categories)
     wb = Workbook()
     wb.remove(wb.active)
 
@@ -1351,7 +1376,7 @@ def export_to_excel_by_category(data, categories, report_prefix, market_type, en
     used_sheet_titles: set[str] = set()
 
     for category, symbols in categories.items():
-        category_data = {symbol: data[symbol] for symbol in symbols if symbol in data}
+        category_data = {symbol: ordered_data[symbol] for symbol in symbols if symbol in ordered_data}
         if not category_data:
             continue
 
@@ -1406,7 +1431,7 @@ def export_to_excel_by_category(data, categories, report_prefix, market_type, en
         )
 
     ws_summary = wb.create_sheet(title="汇总", index=0)
-    df_summary = pd.DataFrame(data).T
+    df_summary = pd.DataFrame(ordered_data).T
 
     if include_market_region:
         df_summary = df_summary[

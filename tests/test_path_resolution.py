@@ -62,6 +62,24 @@ def test_secondary_market_exports_resolve_to_project_root(monkeypatch) -> None:
     assert saved_paths[0].parent == secondary_market_report.APP_CONFIG.output_dir
 
 
+def test_secondary_market_default_dates_hold_previous_issue_until_thursday() -> None:
+    cases = [
+        (secondary_market_report.datetime(2026, 6, 8), secondary_market_report.datetime(2026, 5, 22), secondary_market_report.datetime(2026, 6, 6)),
+        (secondary_market_report.datetime(2026, 6, 9), secondary_market_report.datetime(2026, 5, 22), secondary_market_report.datetime(2026, 6, 6)),
+        (secondary_market_report.datetime(2026, 6, 11), secondary_market_report.datetime(2026, 5, 22), secondary_market_report.datetime(2026, 6, 6)),
+        (secondary_market_report.datetime(2026, 6, 12), secondary_market_report.datetime(2026, 5, 29), secondary_market_report.datetime(2026, 6, 13)),
+        (secondary_market_report.datetime(2026, 6, 13), secondary_market_report.datetime(2026, 5, 29), secondary_market_report.datetime(2026, 6, 13)),
+        (secondary_market_report.datetime(2026, 6, 14), secondary_market_report.datetime(2026, 5, 29), secondary_market_report.datetime(2026, 6, 13)),
+    ]
+
+    for reference, expected_start, expected_end in cases:
+        start, end = secondary_market_report.get_default_dates(reference)
+        assert start == expected_start
+        assert end == expected_end
+        assert start.weekday() == 4
+        assert end.weekday() == 5
+
+
 def test_secondary_market_summary_respects_category_order(monkeypatch) -> None:
     saved_workbooks = []
 

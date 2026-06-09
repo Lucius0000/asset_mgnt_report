@@ -28,26 +28,20 @@ PowerShell 临时设置示例：
 $env:FRED_API_KEY="your_fred_api_key"
 ```
 
-#### 3. 手动准备的数据文件
+#### 3. 种子数据与人工维护项
 
-主要通过 AKShare、yfinance、FRED 和官方统计接口自动获取数据，但仍有少量数据需要提前下载并放入 `data/seeds/`。
+多数数据已通过 AKShare、yfinance、FRED、FiscalData、香港统计处 API 等接口自动获取；例如香港 CPI 默认使用香港统计处 API，本地 `Table 510*.xlsx` 只作为兜底，不再是运行前必须准备的文件。
 
-> 已设置文件名正则匹配，更新文件后通常不需要改代码
+仍需要关注的文件主要有两类：
 
-- 香港 CPI：[政府統計處 : 表510-60001：消費物價指數](https://www.censtatd.gov.hk/tc/web_table.html?full_series=1&id=510-60001#)
-  - 当前主流程优先使用香港统计处 API 自动拉取
-  - 本地 `Table 510*.xlsx` 仅作为 API 失败时的兜底种子文件
-  - 如需手工准备，仍建议选择“完整数列”，下载长周期完整数据
-![CPI_HK 获取图](docs/assets/CPI_HK.png)
+- 版本控制中的种子文件：例如 `AASTOCKS_Export*.xlsx`、`000300cons.xls`、`MSPD_SumSecty*.csv`。这些文件用于成分股、市值或兜底数据，更新同名模式文件后通常不需要改代码。
+- 人工维护模板：`data/seeds/整体.xlsx` 中房地产等非自动托管行仍保留人工维护；`scripts/房地产-半自动化表格.xlsx` 是房地产板块的人工整理辅助表。
+
+常用来源：
 
 - 恒生指数成分股：[指數及成份股 - 指數成份股 - 恆生指數](http://www.aastocks.com/tc/stocks/market/index/hk-index-con.aspx?index=HSI)
-![HSI_CAP 获取图](docs/assets/HSI_CAP.png)
-
 - 美国财政部流通国债总票面价值：[U.S. Treasury Monthly Statement of the Public Debt (MSPD)](https://fiscaldata.treasury.gov/datasets/monthly-statement-public-debt/summary-of-treasury-securities-outstanding)
-![MSPD获取图](docs/assets/MSPD.png)
-
 - 沪深300成分股名录：[沪深300指数 (000300)](https://www.csindex.com.cn/uploads/file/autofile/cons#/indices/family/detail?indexCode=000300)
-![HS300_list获取图](docs/assets/HS300_list.png)
 
 #### 4. “整体”表格准备
 
@@ -86,8 +80,28 @@ python scripts/overall.py
 - 运行二级市场补充报表：
 
 ```powershell
-python -m scripts.pipelines.secondary_market_report
+python scripts/secondary_market.py --market-mode mixed --use-default-dates
 ```
+
+二级市场的智能默认日期按资管周报节奏处理：周一至周四运行时默认跟踪上一期窗口（三周前周五到上周周六）；周五至周日运行时默认跟踪当期窗口（上上周五到本周六）。如需覆盖，可显式传入 `--start-date` 和 `--end-date`。
+
+- 启动 Web UI：
+
+```powershell
+streamlit run scripts/web_ui.py
+```
+
+默认访问地址为 `http://localhost:8501`。Web UI 支持主页、主报表、Gainer、二级市场、整体表和校验工作区，适合不直接改代码的运行与复核。
+
+- Docker 运行：
+
+```powershell
+docker compose up amr-ui
+docker compose run --rm amr-cli python -m scripts.main
+docker compose run --rm amr-cli python -m scripts.validation.validate_outputs
+```
+
+更完整的 Docker / Web UI 使用说明见 `docs/docker部署与使用指南.md`；版本变化见 `docs/版本迭代日志.md`。
 
 #### 2. 四种运行方式
 
@@ -232,7 +246,7 @@ python scripts/pipelines/gainer_stock.py --old-date 2026-03-28 --new-date 2026-0
 | `gdp_report.py` | `--debug` | 开关参数 |
 | `interest_rate_report.py` | `--debug` | 开关参数 |
 | `secondary_market_report.py` | `--market-mode` | `us` / `china` / `hk` / `mixed` |
-| `secondary_market_report.py` | `--use-default-dates` | 开关参数 |
+| `secondary_market_report.py` | `--use-default-dates` | 开关参数；周一至周四回看上一期，周五后切换当期 |
 | `secondary_market_report.py` | `--start-date` / `--end-date` | `YYYY-MM-DD` |
 | `stock_cap_report.py` | `--markets` | 空格分隔列表；候选值：`CN US HK` |
 | `stock_index_report.py` | `--time-range` | 整数天数 |
@@ -312,59 +326,7 @@ python scripts/pipelines/gainer_stock.py --old-date 2026-03-28 --new-date 2026-0
 - `AMR_GOLD_CURRENT_PRICE`
 - `AMR_GOLD_PREVIOUS_PRICE`
 
-#### 4. Web UI 运行
-
-- 启动方式：
-
-```powershell
-streamlit run scripts/web_ui.py
-```
-
-- 默认访问地址：
-  - `http://localhost:8501`
-
-- Web UI 可用于：
-  - 通过顶部标签在主页、主报表、Gainer、整体表、校验五个工作区之间切换
-  - 默认启用代理模式，也可在侧边栏关闭
-  - 在主页概览中同时查看四个工作入口
-  - 选择主报表模块
-  - 在页面内通过日历选择 Gainer 的 `本周末日期（周六）` 和 `两周前日期（周六）`
-  - 参考 LBMA Gold Price 页面中的 `USD PM` 填写黄金价格
-  - 在页面内指定整体表输入、输出、日志路径
-  - 在当前标签页内保留运行结果，不再因工作区切换出现空白页
-  - 触发 main / codex 输出校验
-
-#### 5. Docker 运行
-
-- 构建镜像：
-
-```powershell
-docker build -t asset-mgnt-report .
-```
-
-- 启动 Web UI：
-
-```powershell
-docker compose up amr-ui
-```
-
-- 在容器中运行主报表：
-
-```powershell
-docker compose run --rm amr-cli python -m scripts.main
-```
-
-- 在容器中运行校验：
-
-```powershell
-docker compose run --rm amr-cli python -m scripts.validation.validate_outputs
-```
-
-更完整的 Docker 说明见：
-- `docs/docker部署与使用指南.md`
-- `docs/版本迭代日志.md`
-
-#### 6. 输出位置
+##### 3.4 输出位置
 
 - 主输出目录：`output/`
 - 原始调试数据：`output/raw_data/`
@@ -535,19 +497,3 @@ $$
 - 波动率和 Sharpe Ratio 统一使用月度数据
 - `Adjusted Sharpe` 统一通过共享函数计算
 - 汇率修正逻辑仍保留，但实现已收敛到统一算法层
-
-### 七、Docker 与 Web UI
-
-- Docker 适合：
-  - 跨设备迁移
-  - 给不会 Python 的协作者直接使用
-  - 固定依赖环境，减少“我这里能跑、别人那里不能跑”
-- Web UI 适合：
-  - 在页面中勾选模块
-  - 不直接改代码
-  - 运行主报表 / Gainer / 整体 / 校验
-
-建议阅读：
-- `docs/docker部署与使用指南.md`
-- `docs/版本迭代日志.md`
-- `docs/重构前后对比报告.md`

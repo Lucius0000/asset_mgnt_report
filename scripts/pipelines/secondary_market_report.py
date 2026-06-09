@@ -47,7 +47,7 @@ INTRO_TEXT = """
 由于传入 yfinance 的 end_date 为开区间，需要选择周六为 end_date，方可获取周五数据;
 且由于时区的影响，美股数据推荐使用周日为 end_date;
 由于是按照收盘价计算两周变动的，所以应该是取两周前的周五收盘价与当周周五收盘价比较、计算。
-综上，start_date 应为两周前周五，end_date 应为当周周日，如 10.24 - 11.09
+智能默认日期会按周报节奏切换：周一至周四默认使用上一期窗口，周五后默认使用当期窗口。
 """
 
 
@@ -545,38 +545,34 @@ def get_date_input(prompt):
             print(f"❌ 输入的日期无效：{e}，请重新输入。")
 
 
-def get_default_dates():
+def get_default_dates(reference: datetime | None = None):
     """
     获取默认的金融分析日期范围
     
     逻辑：
-    - end_date: 本周六（确保包含本周五的交易数据）
-    - start_date: 上上周五（标准的两周分析起点）
+    - 周一到周四运行：仍默认跟踪上一期周报窗口，即三周前周五到上周周六
+    - 周五到周日运行：默认跟踪当期周报窗口，即上上周五到本周六
     
     这样设计的原因：
     1. 金融市场交易周是周一到周五
-    2. 周六作为结束日期确保包含本周五的数据
-    3. 与用户验证的模式一致：周五→周六的数据能计算正确的两周变动
-    4. 不受运行脚本具体时间影响，结果稳定
+    2. yfinance 的 end_date 是开区间，周六作为结束日期可以覆盖周五收盘
+    3. 周一到周四经常还在调整上一期资管周报，因此默认回看上一期两周窗口
+    4. 周五之后才切换到当期窗口，避免提前取到尚未完整的一周
     """
-    today = datetime.now()
+    today = reference or datetime.now()
     current_weekday = today.weekday()  # 0=周一, 1=周二, ..., 5=周六, 6=周日
 
-    # 计算本周六作为 end_date
-    if current_weekday == 5:  # 今天是周六
+    if current_weekday <= 3:  # 周一到周四：上一期周报窗口
+        days_since_previous_saturday = current_weekday + 2
+        end_date = today - timedelta(days=days_since_previous_saturday)
+    elif current_weekday == 5:  # 周六
         end_date = today
-    elif current_weekday == 6:  # 今天是周日
-        end_date = today - timedelta(days=1)  # 昨天是周六
-    else:  # 周一到周五
-        days_until_saturday = 5 - current_weekday
-        end_date = today + timedelta(days=days_until_saturday)
+    elif current_weekday == 6:  # 周日
+        end_date = today - timedelta(days=1)
+    else:  # 周五：当期周报窗口
+        end_date = today + timedelta(days=1)
 
-    # 计算上上周五作为 start_date（从本周六向前推15天）
     start_date = end_date - timedelta(days=15)
-
-    # 验证start_date确实是周五，如果不是则调整
-    while start_date.weekday() != 4:  # 4 = 周五
-        start_date -= timedelta(days=1)
 
     return start_date, end_date
 
@@ -642,7 +638,7 @@ def resolve_date_selection(
         end = get_date_input("结束日期")
     else:
         print("选择日期输入方式：")
-        print("1. 使用智能默认日期（上周五→本周六）")
+        print("1. 使用智能默认日期（周一至周四回看上一期，周五后切换当期）")
         print("2. 手动输入日期")
         choice = input("请选择 (1 或 2): ").strip()
         if choice == "1":
@@ -1585,7 +1581,12 @@ def main(
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="运行二级市场周报。")
     parser.add_argument("--market-mode", choices=["us", "china", "hk", "mixed"], help="指定市场模式。")
-    parser.add_argument("--use-default-dates", action="store_true", default=None, help="使用默认两周区间。")
+    parser.add_argument(
+        "--use-default-dates",
+        action="store_true",
+        default=None,
+        help="使用智能默认两周区间：周一至周四回看上一期，周五后切换当期。",
+    )
     parser.add_argument("--start-date", help="开始日期，格式 YYYY-MM-DD。")
     parser.add_argument("--end-date", help="结束日期，格式 YYYY-MM-DD。")
     parser.add_argument("--retry-attempts", type=int, help="失败标的的集中重试次数。")

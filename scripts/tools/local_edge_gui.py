@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+# ruff: noqa: E402,I001
+
 import argparse
+import importlib.util
 import os
 from pathlib import Path
 import re
@@ -9,7 +12,9 @@ import time
 from typing import Iterable
 
 
-def _ensure_local_pytools() -> None:
+def _ensure_selenium_path() -> None:
+    if importlib.util.find_spec("selenium.webdriver") is not None:
+        return
     pytools_root = Path(
         os.environ.get(
             "CODEX_PYTOOLS",
@@ -20,7 +25,7 @@ def _ensure_local_pytools() -> None:
         sys.path.insert(0, str(pytools_root))
 
 
-_ensure_local_pytools()
+_ensure_selenium_path()
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -57,7 +62,8 @@ def _click_button(driver: webdriver.Edge, wait: WebDriverWait, text: str) -> Non
 
 def _fill_input(driver: webdriver.Edge, wait: WebDriverWait, label: str, value: str) -> None:
     label_xpath = (
-        f"//label[.//*[contains(normalize-space(),\"{label}\")] or contains(normalize-space(),\"{label}\")]"
+        f"//label[.//*[contains(normalize-space(),\"{label}\")] "
+        f"or contains(normalize-space(),\"{label}\")]"
     )
     label_el = wait.until(EC.presence_of_element_located((By.XPATH, label_xpath)))
     for_attr = label_el.get_attribute("for")
